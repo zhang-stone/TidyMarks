@@ -3,6 +3,9 @@
   "name": "AI Bookmark Organizer",
   "description": "Analyze, organize and safely write back Chrome native bookmarks with an AI model you configure.",
   "version": "0.1.0",
+  "icons": {
+    "128": "icon/128.png"
+  },
   "minimum_chrome_version": "134",
   "permissions": [
     "bookmarks",
