@@ -373,7 +373,7 @@ function AppHeader({ activeStep, title }: { activeStep: number; title: string })
             <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </div>
-        <span>BookSort AI</span>
+        <span>TidyMarks</span>
       </div>
 
       <div className="step-indicator">
@@ -664,7 +664,7 @@ function buildFolderMap(nodes: FolderTreeNode[]): Map<string, FolderTreeNode> {
   return map;
 }
 
-function SelectPage(props: {
+export function SelectPage(props: {
   scan: ScanResult;
   selectedIds: Set<string> | null;
   onSelect: (ids: Set<string> | null) => void;
@@ -785,15 +785,12 @@ function SelectPage(props: {
               collection={collection}
               defaultExpandedValue={allBranchIds}
               size="sm"
-              variant="plain"
             >
               <TreeView.Tree>
                 <TreeView.Node
-                  branchContentProps={{ className: 'folder-tree-indent' }}
                   render={({ node, nodeState }) => {
                     const folderNode = folderMap.get(node.id);
                     if (!folderNode) return null;
-                    const isLeaf = folderNode.children.length === 0;
                     const isActive = activeFolderId === node.id;
                     const count = getLeafCount(folderNode);
                     const checkState = getLeafCheckState(folderNode);
@@ -832,13 +829,15 @@ function SelectPage(props: {
                     }
 
                     return (
-                      <TreeView.ItemText
+                      <TreeView.Item
                         className={`folder-tree-row folder-tree-leaf ${isActive ? 'active' : ''}`}
                         onClick={() => setActiveFolderId(node.id)}
                       >
                         <span className="folder-tree-arrow-spacer" />
                         <FolderIcon />
-                        <span className="folder-tree-name">{node.name}</span>
+                        <TreeView.ItemText className="folder-tree-name">
+                          {node.name}
+                        </TreeView.ItemText>
                         {count.total > 0 && (
                           <>
                             <span className="folder-tree-count">{count.selected}/{count.total}</span>
@@ -852,7 +851,7 @@ function SelectPage(props: {
                             />
                           </>
                         )}
-                      </TreeView.ItemText>
+                      </TreeView.Item>
                     );
                   }}
                 />

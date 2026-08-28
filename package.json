@@ -1,5 +1,5 @@
 {
-  "name": "ai-bookmark-organizer",
+  "name": "tidymarks",
   "description": "Analyze, organize and safely write back Chrome native bookmarks via a browser extension.",
   "private": true,
   "version": "0.1.0",

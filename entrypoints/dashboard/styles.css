@@ -538,11 +538,6 @@ body {
   outline: none;
 }
 
-.folder-tree-indent,
-.select-folder-tree [data-part="branch-content"] {
-  padding-left: 24px !important;
-}
-
 .folder-tree-row {
   display: flex;
   align-items: center;
