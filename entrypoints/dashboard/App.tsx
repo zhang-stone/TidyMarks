@@ -20,6 +20,7 @@ import {
   type ScannedBookmark,
 } from '@/src/shared/schemas';
 import { classifyError } from '@/src/shared/errors';
+import { TreeView, createTreeCollection } from '@chakra-ui/react';
 
 // ===== 类型定义 =====
 
@@ -602,6 +603,67 @@ function ScanPage(props: {
 
 // ===== 选择范围页 =====
 
+interface FolderTreeNode {
+  id: string;
+  name: string;
+  children: FolderTreeNode[];
+  bookmarkIds: string[];
+}
+
+const FolderIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+    <path d="M1 4a1 1 0 0 1 1-1h3.586L7 4.414A1 1 0 0 0 7.707 4.7L8 5H14a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z" fill="#a5b4fc" stroke="#6366f1" strokeWidth="0.6" />
+  </svg>
+);
+
+function buildFolderTree(scan: ScanResult): FolderTreeNode[] {
+  const folderMap = new Map<string, FolderTreeNode>();
+
+  for (const root of scan.roots) {
+    folderMap.set(root.id, { id: root.id, name: root.title, children: [], bookmarkIds: [] });
+  }
+  for (const folder of scan.folders) {
+    folderMap.set(folder.id, { id: folder.id, name: folder.title, children: [], bookmarkIds: [] });
+  }
+  for (const folder of scan.folders) {
+    const parent = folderMap.get(folder.parentId);
+    const node = folderMap.get(folder.id)!;
+    if (parent) parent.children.push(node);
+  }
+  for (const bm of scan.bookmarks) {
+    const folder = folderMap.get(bm.parentId);
+    if (folder) folder.bookmarkIds.push(bm.id);
+  }
+
+  // 剪枝：移除没有书签的空文件夹
+  const prune = (nodes: FolderTreeNode[]): FolderTreeNode[] => {
+    return nodes
+      .map(n => ({ ...n, children: prune(n.children) }))
+      .filter(n => n.children.length > 0 || n.bookmarkIds.length > 0);
+  };
+
+  return prune(scan.roots.map(r => folderMap.get(r.id)!));
+}
+
+function collectAllBookmarkIds(node: FolderTreeNode): string[] {
+  return [
+    ...node.bookmarkIds,
+    ...node.children.flatMap(collectAllBookmarkIds),
+  ];
+}
+
+function buildFolderMap(nodes: FolderTreeNode[]): Map<string, FolderTreeNode> {
+  const map = new Map<string, FolderTreeNode>();
+  const walk = (list: FolderTreeNode[]) => {
+    for (const n of list) {
+      map.set(n.id, n);
+      walk(n.children);
+    }
+  };
+  walk(nodes);
+  return map;
+}
+
 function SelectPage(props: {
   scan: ScanResult;
   selectedIds: Set<string> | null;
@@ -615,46 +677,45 @@ function SelectPage(props: {
     ? bookmarks.filter((b) => selectedIds.has(b.id)).length
     : bookmarks.length;
 
-  // 按父文件夹分组
-  const folderGroups = useMemo(() => {
-    const groups = new Map<string, { title: string; bookmarks: ScannedBookmark[] }>();
-    for (const b of bookmarks) {
-      const folderPath = (b.path.length > 0 ? b.path[b.path.length - 1] : undefined) ?? 'Unsorted';
-      const existing = groups.get(folderPath);
-      if (existing) existing.bookmarks.push(b);
-      else groups.set(folderPath, { title: folderPath, bookmarks: [b] });
-    }
-    return groups;
+  const tree = useMemo(() => buildFolderTree(scan), [scan]);
+  const folderMap = useMemo(() => buildFolderMap(tree), [tree]);
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+
+  const collection = useMemo(() => createTreeCollection({
+    rootNode: { id: 'root', name: 'Root', children: tree, bookmarkIds: [] },
+    nodeToValue: (node) => node.id,
+    nodeToString: (node) => node.name,
+  }), [tree]);
+
+  // 默认展开所有分支节点
+  const allBranchIds = useMemo(() => {
+    const ids: string[] = [];
+    const walk = (nodes: FolderTreeNode[]) => {
+      for (const n of nodes) {
+        if (n.children.length > 0) {
+          ids.push(n.id);
+          walk(n.children);
+        }
+      }
+    };
+    walk(tree);
+    return ids;
+  }, [tree]);
+
+  const bookmarksById = useMemo(() => {
+    const map = new Map<string, ScannedBookmark>();
+    for (const b of bookmarks) map.set(b.id, b);
+    return map;
   }, [bookmarks]);
 
-  // 文件夹级别的选中状态
-  const folderSelectionState = useMemo(() => {
-    const states = new Map<string, 'all' | 'some' | 'none'>();
-    for (const [key, group] of folderGroups) {
-      if (!selectedIds) {
-        states.set(key, 'all');
-        continue;
-      }
-      const selected = group.bookmarks.filter(b => selectedIds.has(b.id)).length;
-      if (selected === group.bookmarks.length) states.set(key, 'all');
-      else if (selected > 0) states.set(key, 'some');
-      else states.set(key, 'none');
-    }
-    return states;
-  }, [folderGroups, selectedIds]);
+  const activeFolderNode = activeFolderId ? folderMap.get(activeFolderId) ?? null : null;
 
-  const toggleFolder = (folderKey: string) => {
-    const group = folderGroups.get(folderKey);
-    if (!group) return;
-    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
-    const state = folderSelectionState.get(folderKey);
-    if (state === 'all') {
-      for (const b of group.bookmarks) ids.delete(b.id);
-    } else {
-      for (const b of group.bookmarks) ids.add(b.id);
-    }
-    props.onSelect(ids);
-  };
+  const activeFolderBookmarks = useMemo(() => {
+    if (!activeFolderNode) return [];
+    return activeFolderNode.bookmarkIds
+      .map(id => bookmarksById.get(id))
+      .filter((b): b is ScannedBookmark => !!b);
+  }, [activeFolderNode, bookmarksById]);
 
   const toggleBookmark = (id: string) => {
     const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
@@ -663,87 +724,204 @@ function SelectPage(props: {
     props.onSelect(ids);
   };
 
-  const selectAll = () => props.onSelect(null);
-  const selectNone = () => props.onSelect(new Set());
+  const toggleFolder = (node: FolderTreeNode) => {
+    const bmIds = collectAllBookmarkIds(node);
+    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
+    const allSelected = bmIds.every(id => ids.has(id));
+    if (allSelected) {
+      for (const id of bmIds) ids.delete(id);
+    } else {
+      for (const id of bmIds) ids.add(id);
+    }
+    props.onSelect(ids);
+  };
+
+  const selectAllInFolder = () => {
+    if (!activeFolderNode) return;
+    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
+    for (const id of activeFolderNode.bookmarkIds) ids.add(id);
+    props.onSelect(ids);
+  };
+
+  const selectNoneInFolder = () => {
+    if (!activeFolderNode) return;
+    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
+    for (const id of activeFolderNode.bookmarkIds) ids.delete(id);
+    props.onSelect(ids);
+  };
+
+  // 计算叶子节点的选中状态
+  const getLeafCheckState = (node: FolderTreeNode): 'all' | 'some' | 'none' => {
+    const bmIds = collectAllBookmarkIds(node);
+    if (bmIds.length === 0) return 'none';
+    if (!selectedIds) return 'all';
+    const count = bmIds.filter(id => selectedIds.has(id)).length;
+    if (count === bmIds.length) return 'all';
+    if (count > 0) return 'some';
+    return 'none';
+  };
+
+  const getLeafCount = (node: FolderTreeNode): { selected: number; total: number } => {
+    const bmIds = collectAllBookmarkIds(node);
+    const selected = selectedIds ? bmIds.filter(id => selectedIds.has(id)).length : bmIds.length;
+    return { selected, total: bmIds.length };
+  };
 
   return (
     <div className="page-container wide">
       <div className="page-header">
         <div className="page-header-left">
           <h1>选择整理范围</h1>
-          <p>AI 只会处理你勾选的内容</p>
+          <p>点击文件夹查看书签，勾选要整理的内容</p>
         </div>
       </div>
 
-      <div className="select-layout">
-        {/* 左栏：按文件夹选择 */}
-        <div className="select-panel">
-          <h3>按文件夹选择</h3>
-          <div className="folder-checkbox-list">
-            {[...folderGroups.entries()].map(([key, group]) => (
-              <label key={key} className="folder-checkbox-item">
-                <input
-                  type="checkbox"
-                  checked={folderSelectionState.get(key) !== 'none'}
-                  ref={(el) => {
-                    if (el) el.indeterminate = folderSelectionState.get(key) === 'some';
+      <div className="select-split">
+        {/* 左栏：文件夹树 */}
+        <div className="select-split-left">
+          <div className="select-split-header">书签文件夹</div>
+          <div className="select-folder-tree">
+            <TreeView.Root
+              collection={collection}
+              defaultExpandedValue={allBranchIds}
+              size="sm"
+              variant="plain"
+            >
+              <TreeView.Tree>
+                <TreeView.Node
+                  branchContentProps={{ className: 'folder-tree-indent' }}
+                  render={({ node, nodeState }) => {
+                    const folderNode = folderMap.get(node.id);
+                    if (!folderNode) return null;
+                    const isLeaf = folderNode.children.length === 0;
+                    const isActive = activeFolderId === node.id;
+                    const count = getLeafCount(folderNode);
+                    const checkState = getLeafCheckState(folderNode);
+
+                    if (nodeState.isBranch) {
+                      return (
+                        <TreeView.BranchControl
+                          className={`folder-tree-row ${isActive ? 'active' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveFolderId(node.id);
+                          }}
+                        >
+                          <TreeView.BranchIndicator className="folder-tree-arrow">
+                            <span>▾</span>
+                          </TreeView.BranchIndicator>
+                          <FolderIcon />
+                          <TreeView.BranchText className="folder-tree-name">
+                            {node.name}
+                          </TreeView.BranchText>
+                          {count.total > 0 && (
+                            <>
+                              <span className="folder-tree-count">{count.selected}/{count.total}</span>
+                              <input
+                                type="checkbox"
+                                className="folder-tree-checkbox"
+                                checked={checkState !== 'none'}
+                                ref={(el) => { if (el) el.indeterminate = checkState === 'some'; }}
+                                onChange={(e) => { e.stopPropagation(); toggleFolder(folderNode); }}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </>
+                          )}
+                        </TreeView.BranchControl>
+                      );
+                    }
+
+                    return (
+                      <TreeView.ItemText
+                        className={`folder-tree-row folder-tree-leaf ${isActive ? 'active' : ''}`}
+                        onClick={() => setActiveFolderId(node.id)}
+                      >
+                        <span className="folder-tree-arrow-spacer" />
+                        <FolderIcon />
+                        <span className="folder-tree-name">{node.name}</span>
+                        {count.total > 0 && (
+                          <>
+                            <span className="folder-tree-count">{count.selected}/{count.total}</span>
+                            <input
+                              type="checkbox"
+                              className="folder-tree-checkbox"
+                              checked={checkState !== 'none'}
+                              ref={(el) => { if (el) el.indeterminate = checkState === 'some'; }}
+                              onChange={(e) => { e.stopPropagation(); toggleFolder(folderNode); }}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </>
+                        )}
+                      </TreeView.ItemText>
+                    );
                   }}
-                  onChange={() => toggleFolder(key)}
                 />
-                <span className="folder-name">{group.title}</span>
-                <span className="folder-count">{group.bookmarks.length}</span>
-              </label>
-            ))}
+              </TreeView.Tree>
+            </TreeView.Root>
           </div>
         </div>
 
-        {/* 右栏：逐条管理 */}
-        <div className="select-panel">
-          <div className="select-panel-header">
-            <h3>逐条管理</h3>
-            <div className="select-actions">
-              <button onClick={selectAll}>全选</button>
-              <button onClick={selectNone}>全不选</button>
-            </div>
-          </div>
-          <div className="bookmark-check-list">
-            {bookmarks.map((b) => (
-              <label key={b.id} className="bookmark-check-item">
-                <input
-                  type="checkbox"
-                  checked={!selectedIds || selectedIds.has(b.id)}
-                  onChange={() => toggleBookmark(b.id)}
-                />
-                <img
-                  className="bookmark-favicon"
-                  src={`chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(b.url)}&size=16`}
-                  alt=""
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                />
-                <span className="bookmark-title">{b.title || b.url}</span>
-                {b.path.length > 0 && (
-                  <span className="bookmark-folder-pill">{b.path[b.path.length - 1]}</span>
+        {/* 右栏：书签列表 */}
+        <div className="select-split-right">
+          {activeFolderNode ? (
+            <>
+              <div className="select-split-header">
+                <span className="select-right-title">
+                  <FolderIcon />
+                  {activeFolderNode.name}
+                </span>
+                <div className="select-actions">
+                  <button onClick={selectAllInFolder}>全选</button>
+                  <button onClick={selectNoneInFolder}>全不选</button>
+                </div>
+              </div>
+              <div className="select-bookmark-list">
+                {activeFolderBookmarks.map(b => (
+                  <label key={b.id} className="select-bookmark-item">
+                    <input
+                      type="checkbox"
+                      checked={!selectedIds || selectedIds.has(b.id)}
+                      onChange={() => toggleBookmark(b.id)}
+                    />
+                    <img
+                      className="select-bookmark-favicon"
+                      src={`chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(b.url)}&size=32`}
+                      alt=""
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                    <div className="select-bookmark-info">
+                      <span className="select-bookmark-title">{b.title || b.url}</span>
+                      <span className="select-bookmark-url">{b.url}</span>
+                    </div>
+                  </label>
+                ))}
+                {activeFolderBookmarks.length === 0 && (
+                  <div className="select-empty">该文件夹下无书签</div>
                 )}
-              </label>
-            ))}
-          </div>
+              </div>
+            </>
+          ) : (
+            <div className="select-empty-panel">
+              <p>点击左侧文件夹查看书签</p>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="select-footer">
+        <button className="btn btn-outline" onClick={props.onBack}>
+          ← 返回
+        </button>
         <span className="select-footer-count">
           已选 <strong>{selectedCount}</strong> 条书签
         </span>
-        <div className="btn-row">
-          <button className="btn btn-outline" onClick={props.onBack}>返回</button>
-          <button
-            className="btn btn-primary"
-            onClick={props.onGenerate}
-            disabled={selectedCount === 0}
-          >
-            AI 开始分析 ({selectedCount} 条) →
-          </button>
-        </div>
+        <button
+          className="btn btn-primary"
+          onClick={props.onGenerate}
+          disabled={selectedCount === 0}
+        >
+          AI 开始分析 ({selectedCount} 条) →
+        </button>
       </div>
     </div>
   );
@@ -982,7 +1160,7 @@ function TreeFolder({ node, onToggle, depth = 0 }: {
     <div className="tree-folder">
       <div className="tree-folder-header" onClick={() => setExpanded(!expanded)}>
         <span className={`tree-folder-arrow ${!expanded ? 'collapsed' : ''}`}>▾</span>
-        <span className="tree-folder-icon">📁</span>
+        <FolderIcon />
         <span className="tree-folder-name">{node.name}</span>
         {node.isNew && <span className="tree-folder-badge">新</span>}
         <span className="tree-folder-count">{totalBookmarks}/{totalBookmarks}</span>
