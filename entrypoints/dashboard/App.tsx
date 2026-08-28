@@ -21,13 +21,9 @@ import {
 } from '@/src/shared/schemas';
 import { classifyError } from '@/src/shared/errors';
 
-/**
- * Dashboard 全页应用（架构方案第 3.1 节）。
- * 四个页面状态：模型设置 → 扫描选择 → 方案审核 → 执行结果。
- * 模型请求由本页面发起；书签写入全部经由 Service Worker 消息。
- */
+// ===== 类型定义 =====
 
-type View = 'settings' | 'scan' | 'review' | 'result';
+type View = 'settings' | 'scan' | 'select' | 'organizing' | 'preview' | 'result';
 
 interface AppState {
   view: View;
@@ -35,7 +31,6 @@ interface AppState {
   job: JobState | null;
   scan: ScanResult | null;
   plan: PlanRecord | null;
-  /** 方案审核页的本地编辑副本（应用前写回 storage）。 */
   editedAssignments: Assignment[] | null;
   progress: GeneratePlanProgress | null;
   busy: string | null;
@@ -72,7 +67,7 @@ function viewForStatus(status: ResumeView): View {
     return 'result';
   }
   if (status.plan && status.plan.phase === 'done') {
-    return 'review';
+    return 'preview';
   }
   if (status.scan) {
     return 'scan';
@@ -104,7 +99,7 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         plan: action.plan,
         editedAssignments: action.plan.assignments,
-        view: 'review',
+        view: 'preview',
         progress: null,
       };
     case 'assignments':
@@ -118,6 +113,49 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
+// ===== 步骤配置 =====
+
+const STEPS = [
+  { key: 'settings', label: '配置', num: 1 },
+  { key: 'scan', label: '扫描', num: 2 },
+  { key: 'organizing', label: '整理', num: 3 },
+  { key: 'preview', label: '预览', num: 4 },
+  { key: 'result', label: '完成', num: 5 },
+] as const;
+
+function getActiveStep(view: View, jobStatus?: string): number {
+  switch (view) {
+    case 'settings': return 1;
+    case 'scan': return 2;
+    case 'select': return 2;
+    case 'organizing': return 3;
+    case 'preview': return 4;
+    case 'result':
+      // 写入中仍属于步骤4
+      if (jobStatus === 'applying' || jobStatus === 'undoing') return 4;
+      return 5;
+    default: return 1;
+  }
+}
+
+function getHeaderTitle(view: View, jobStatus?: string): string {
+  switch (view) {
+    case 'settings': return '配置';
+    case 'scan': return '扫描结果';
+    case 'select': return '选择范围';
+    case 'organizing': return 'AI 分析中';
+    case 'preview': return '确认建议';
+    case 'result':
+      if (jobStatus === 'applying') return '写入中...';
+      if (jobStatus === 'undoing') return '撤销中...';
+      if (jobStatus === 'completed') return '已完成';
+      return '执行结果';
+    default: return '';
+  }
+}
+
+// ===== 根组件 =====
+
 const storage = createStorageRepository(chrome.storage.local);
 
 export default function App() {
@@ -125,7 +163,7 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string> | null>(null);
   const jobIdRef = useRef<string>(crypto.randomUUID());
 
-  // ---- 初始化：加载设置 + GET_STATUS 恢复界面（不依赖长连接） ----
+  // 初始化：加载设置 + GET_STATUS 恢复界面
   useEffect(() => {
     void (async () => {
       try {
@@ -141,13 +179,13 @@ export default function App() {
     })();
   }, []);
 
-  // ---- 订阅后台广播事件，刷新任务状态 ----
+  // 订阅后台广播事件
   useEffect(() => {
     const listener = (raw: unknown): void => {
       const parsed = EventSchema.safeParse(raw);
       if (!parsed.success) return;
       const data = parsed.data;
-      if (data.type === 'JOB_PROGRESS') return; // 进度由生成阶段的回调展示
+      if (data.type === 'JOB_PROGRESS') return;
       dispatch({ type: 'jobUpdate', job: data.job });
       if (data.type === 'JOB_COMPLETED' || data.type === 'JOB_FAILED') {
         dispatch({ type: 'busy', busy: null });
@@ -184,35 +222,26 @@ export default function App() {
     [state.scan, selectedIds],
   );
 
-  if (state.view === 'settings' || !state.settings) {
-    return (
-      <SettingsPage
-        initial={state.settings}
-        onSaved={(settings) => dispatch({ type: 'settingsSaved', settings })}
-        onError={(message) => dispatch({ type: 'error', error: message })}
-      />
-    );
-  }
+  const activeStep = getActiveStep(state.view, state.job?.status);
+  const headerTitle = getHeaderTitle(state.view, state.job?.status);
 
   return (
-    <div className="container">
-      <header className="card">
-        <h1>AI Bookmark Organizer</h1>
-        <p className="muted">
-          任务状态：{state.job?.status ?? 'idle'}
-          {state.busy ? <span className="badge">{state.busy}</span> : null}
-        </p>
-      </header>
+    <>
+      <AppHeader activeStep={activeStep} title={headerTitle} />
+      {state.error && <div className="page-container"><div className="banner banner-error">{state.error}</div></div>}
 
-      {state.error ? <p className="error">{state.error}</p> : null}
+      {state.view === 'settings' && (
+        <SettingsPage
+          initial={state.settings}
+          onSaved={(settings) => dispatch({ type: 'settingsSaved', settings })}
+          onError={(message) => dispatch({ type: 'error', error: message })}
+        />
+      )}
 
       {state.view === 'scan' && (
         <ScanPage
           scan={state.scan}
-          progress={state.progress}
           busy={state.busy}
-          selectedIds={selectedIds}
-          onSelect={setSelectedIds}
           onScan={async () => {
             jobIdRef.current = crypto.randomUUID();
             const payload = (await runCommand(
@@ -224,13 +253,23 @@ export default function App() {
               dispatch({ type: 'scanDone', scan: payload.scan, job: payload.job });
             }
           }}
+          onNext={() => dispatch({ type: 'view', view: 'select' })}
+        />
+      )}
+
+      {state.view === 'select' && state.scan && (
+        <SelectPage
+          scan={state.scan}
+          selectedIds={selectedIds}
+          onSelect={setSelectedIds}
+          onBack={() => dispatch({ type: 'view', view: 'scan' })}
           onGenerate={async () => {
             if (!state.settings) return;
+            dispatch({ type: 'view', view: 'organizing' });
             dispatch({ type: 'busy', busy: '正在生成整理方案' });
             try {
               const client = createOpenAICompatibleClient(state.settings);
               const folderNames = (state.scan?.folders ?? []).map((f) => f.title);
-              // 扫描完成后任务处于 planning；恢复未完成的管线时沿用当前任务状态。
               const currentJob: JobState =
                 state.job && state.job.jobId === jobIdRef.current
                   ? state.job
@@ -254,6 +293,7 @@ export default function App() {
               dispatch({ type: 'planDone', plan });
             } catch (error) {
               dispatch({ type: 'error', error: classifyError(error).message });
+              dispatch({ type: 'view', view: 'select' });
             } finally {
               dispatch({ type: 'busy', busy: null });
             }
@@ -261,14 +301,21 @@ export default function App() {
         />
       )}
 
-      {state.view === 'review' && state.plan && (
-        <ReviewPage
-          taxonomy={state.plan.taxonomy}
+      {state.view === 'organizing' && (
+        <OrganizingPage
+          progress={state.progress}
+          settings={state.settings}
+        />
+      )}
+
+      {state.view === 'preview' && state.plan && (
+        <PreviewPage
           assignments={state.editedAssignments ?? state.plan.assignments}
+          taxonomy={state.plan.taxonomy}
           bookmarksById={bookmarksById}
           onChange={(assignments) => dispatch({ type: 'assignments', assignments })}
+          onBack={() => dispatch({ type: 'view', view: 'select' })}
           onApply={async () => {
-            // 编辑结果写回存储，Service Worker 应用时读取同一份方案。
             await storage.savePlan({ ...state.plan!, assignments: state.editedAssignments ?? [] });
             await runCommand(
               { type: 'APPLY_PLAN', requestId: crypto.randomUUID(), jobId: jobIdRef.current },
@@ -282,6 +329,7 @@ export default function App() {
       {state.view === 'result' && state.job && (
         <ResultPage
           job={state.job}
+          totalAssignments={state.editedAssignments?.length ?? state.plan?.assignments.length ?? 0}
           busy={state.busy}
           onRetry={() =>
             void runCommand(
@@ -304,28 +352,70 @@ export default function App() {
           onNewRound={() => {
             jobIdRef.current = crypto.randomUUID();
             setSelectedIds(null);
-            // 清理上一轮方案与扫描数据，避免新任务读到旧状态。
             void storage.clear(['plan', 'scan']);
             dispatch({ type: 'view', view: 'scan' });
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 
-// ---------- 模型设置页 ----------
+// ===== 顶部导航栏 =====
+
+function AppHeader({ activeStep, title }: { activeStep: number; title: string }) {
+  return (
+    <header className="app-header">
+      <div className="app-logo">
+        <div className="app-logo-icon">
+          <svg viewBox="0 0 24 24">
+            <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <span>BookSort AI</span>
+      </div>
+
+      <div className="step-indicator">
+        {STEPS.map((step, i) => (
+          <span key={step.key} style={{ display: 'flex', alignItems: 'center' }}>
+            <div className="step-item">
+              <div
+                className={`step-circle ${
+                  step.num < activeStep ? 'completed' :
+                  step.num === activeStep ? 'active' : ''
+                }`}
+              >
+                {step.num < activeStep ? '✓' : step.num}
+              </div>
+              <span className={`step-label ${step.num === activeStep ? 'active' : ''}`}>
+                {step.label}
+              </span>
+            </div>
+            {i < STEPS.length - 1 && (
+              <div className={`step-connector ${step.num < activeStep ? 'completed' : ''}`} />
+            )}
+          </span>
+        ))}
+      </div>
+
+      <div className="header-title">{title}</div>
+    </header>
+  );
+}
+
+// ===== 模型配置页 =====
 
 function SettingsPage(props: {
   initial: ModelSettings | null;
   onSaved: (settings: ModelSettings) => void;
   onError: (message: string) => void;
 }) {
-  const [baseUrl, setBaseUrl] = useState(props.initial?.baseUrl ?? '');
+  const [baseUrl, setBaseUrl] = useState(props.initial?.baseUrl ?? 'https://api.openai.com/v1');
   const [apiKey, setApiKey] = useState(props.initial?.apiKey ?? '');
-  const [model, setModel] = useState(props.initial?.model ?? '');
+  const [model, setModel] = useState(props.initial?.model ?? 'gpt-4o-mini');
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<'success' | 'error' | null>(null);
+  const [testMessage, setTestMessage] = useState('');
   const permissions = createPermissionsRepository();
 
   const asSettings = (): ModelSettings | null => {
@@ -345,9 +435,11 @@ function SettingsPage(props: {
       await permissions.ensureOriginPermission(settings.baseUrl);
       const client: ModelPort = createOpenAICompatibleClient(settings);
       await client.chat([{ role: 'user', content: '请回复 ok' }]);
-      setTestResult('连接成功');
+      setTestResult('success');
+      setTestMessage('连接成功，模型支持结构化输出');
     } catch (error) {
-      setTestResult(`连接失败：${classifyError(error).message}`);
+      setTestResult('error');
+      setTestMessage(`连接失败：${classifyError(error).message}`);
     } finally {
       setTesting(false);
     }
@@ -360,7 +452,6 @@ function SettingsPage(props: {
       return;
     }
     try {
-      // 用户手势内申请精确 Origin；旧 Origin 由用户在浏览器设置中自行管理。
       const granted = await permissions.ensureOriginPermission(settings.baseUrl);
       if (!granted) {
         props.onError('未授予该 API 地址的访问权限');
@@ -374,314 +465,699 @@ function SettingsPage(props: {
   };
 
   return (
-    <div className="container">
+    <div className="page-container">
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1>模型配置</h1>
+          <p>使用你自己的 API Key，数据不经过本扩展服务器</p>
+        </div>
+      </div>
+
       <div className="card">
-        <h1>AI Bookmark Organizer</h1>
-        <p className="muted">
-          配置你自己的 OpenAI-compatible API。密钥仅保存在本扩展的本地存储中，
-          不会上传到任何第三方服务器。
-        </p>
-        <label className="field">
-          Base URL（HTTPS）
+        <div className="field">
+          <label className="field-label">API BASE URL</label>
           <input
+            className="field-input"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://api.example.com/v1"
+            placeholder="https://api.openai.com/v1"
           />
-        </label>
-        <label className="field">
-          API Key
+        </div>
+        <div className="field">
+          <label className="field-label">API KEY</label>
           <input
+            className="field-input"
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="sk-..."
           />
-        </label>
-        <label className="field">
-          Model
+          <div className="field-helper">仅保存在 chrome.storage.local，不会上传</div>
+        </div>
+        <div className="field">
+          <label className="field-label">MODEL</label>
           <input
+            className="field-input"
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder="gpt-4o-mini"
           />
-        </label>
-        <div className="row">
-          <button onClick={() => void testConnection()} disabled={testing}>
+        </div>
+
+        {testResult === 'success' && (
+          <div className="banner banner-success">{testMessage}</div>
+        )}
+        {testResult === 'error' && (
+          <div className="banner banner-error">{testMessage}</div>
+        )}
+
+        <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn btn-outline" onClick={() => void testConnection()} disabled={testing}>
             {testing ? '测试中...' : '测试连接'}
           </button>
-          <button className="primary" onClick={() => void save()}>
-            保存并连接
+          <button className="btn btn-primary" onClick={() => void save()}>
+            下一步 →
           </button>
         </div>
-        {testResult ? <p className="muted">{testResult}</p> : null}
+      </div>
+
+      <div className="info-card">
+        <strong>兼容 OpenAI 格式的服务均可使用</strong>
+        <br />
+        支持 DeepSeek、Ollama、Azure OpenAI 等兼容 /v1/chat/completions 接口的服务。
       </div>
     </div>
   );
 }
 
-// ---------- 扫描选择页 ----------
+// ===== 扫描结果页 =====
 
 function ScanPage(props: {
   scan: ScanResult | null;
-  progress: GeneratePlanProgress | null;
   busy: string | null;
+  onScan: () => void;
+  onNext: () => void;
+}) {
+  const { scan } = props;
+  const bookmarkCount = scan?.bookmarks.length ?? 0;
+  const folderCount = scan?.folders.length ?? 0;
+  const noTitleCount = scan?.bookmarks.filter(b => !b.title).length ?? 0;
+
+  return (
+    <div className="page-container">
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1>扫描书签</h1>
+          <p>{scan ? '扫描完成，查看书签统计信息' : '正在读取你的书签树...'}</p>
+        </div>
+      </div>
+
+      {!scan && (
+        <div className="card">
+          <button className="btn btn-primary btn-full" onClick={props.onScan} disabled={props.busy !== null}>
+            {props.busy ? '正在扫描...' : '开始扫描'}
+          </button>
+        </div>
+      )}
+
+      {scan && (
+        <>
+          <div className="card scan-progress-card">
+            <div className="scan-progress-header">
+              <span>扫描完成</span>
+              <span>100%</span>
+            </div>
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: '100%' }} />
+            </div>
+          </div>
+
+          <div className="stat-grid">
+            <div className="stat-card">
+              <div className="stat-card-value primary">{bookmarkCount}</div>
+              <div className="stat-card-label">书签总数</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-card-value">{folderCount}</div>
+              <div className="stat-card-label">文件夹</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-card-value primary">{bookmarkCount}</div>
+              <div className="stat-card-label">可整理书签</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-card-value muted">{noTitleCount}</div>
+              <div className="stat-card-label">无标题</div>
+            </div>
+          </div>
+
+          <button className="btn btn-primary btn-full" onClick={props.onNext}>
+            选择整理范围 →
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ===== 选择范围页 =====
+
+function SelectPage(props: {
+  scan: ScanResult;
   selectedIds: Set<string> | null;
   onSelect: (ids: Set<string> | null) => void;
-  onScan: () => void;
+  onBack: () => void;
   onGenerate: () => void;
 }) {
   const { scan, selectedIds } = props;
-  const bookmarks = scan?.bookmarks ?? [];
-  const selectedCount = selectedIds ? bookmarks.filter((b) => selectedIds.has(b.id)).length : bookmarks.length;
+  const bookmarks = scan.bookmarks;
+  const selectedCount = selectedIds
+    ? bookmarks.filter((b) => selectedIds.has(b.id)).length
+    : bookmarks.length;
 
-  const toggle = (id: string): void => {
-    const next = new Set(selectedIds ?? bookmarks.map((b) => b.id));
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    props.onSelect(next);
-  };
-
-  const byRoot = useMemo(() => {
-    const groups = new Map<string, ScannedBookmark[]>();
+  // 按父文件夹分组
+  const folderGroups = useMemo(() => {
+    const groups = new Map<string, { title: string; bookmarks: ScannedBookmark[] }>();
     for (const b of bookmarks) {
-      const key = b.rootId;
-      const group = groups.get(key);
-      if (group) group.push(b);
-      else groups.set(key, [b]);
+      const folderPath = (b.path.length > 0 ? b.path[b.path.length - 1] : undefined) ?? 'Unsorted';
+      const existing = groups.get(folderPath);
+      if (existing) existing.bookmarks.push(b);
+      else groups.set(folderPath, { title: folderPath, bookmarks: [b] });
     }
     return groups;
   }, [bookmarks]);
 
-  const rootTitles = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const r of scan?.roots ?? []) map.set(r.id, r.title);
-    return map;
-  }, [scan]);
+  // 文件夹级别的选中状态
+  const folderSelectionState = useMemo(() => {
+    const states = new Map<string, 'all' | 'some' | 'none'>();
+    for (const [key, group] of folderGroups) {
+      if (!selectedIds) {
+        states.set(key, 'all');
+        continue;
+      }
+      const selected = group.bookmarks.filter(b => selectedIds.has(b.id)).length;
+      if (selected === group.bookmarks.length) states.set(key, 'all');
+      else if (selected > 0) states.set(key, 'some');
+      else states.set(key, 'none');
+    }
+    return states;
+  }, [folderGroups, selectedIds]);
+
+  const toggleFolder = (folderKey: string) => {
+    const group = folderGroups.get(folderKey);
+    if (!group) return;
+    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
+    const state = folderSelectionState.get(folderKey);
+    if (state === 'all') {
+      for (const b of group.bookmarks) ids.delete(b.id);
+    } else {
+      for (const b of group.bookmarks) ids.add(b.id);
+    }
+    props.onSelect(ids);
+  };
+
+  const toggleBookmark = (id: string) => {
+    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
+    if (ids.has(id)) ids.delete(id);
+    else ids.add(id);
+    props.onSelect(ids);
+  };
+
+  const selectAll = () => props.onSelect(null);
+  const selectNone = () => props.onSelect(new Set());
 
   return (
-    <div className="container">
-      <div className="card">
-        <h2>扫描与选择</h2>
-        <p className="muted">
-          扫描读取整棵书签树（跳过不可修改节点），默认全选；可按条取消不需要整理的书签。
-        </p>
-        <div className="row">
-          <button onClick={props.onScan} disabled={props.busy !== null}>
-            {scan ? '重新扫描' : '扫描书签'}
-          </button>
-          <button
-            className="primary"
-            onClick={props.onGenerate}
-            disabled={props.busy !== null || selectedCount === 0}
-          >
-            生成整理方案
-          </button>
+    <div className="page-container wide">
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1>选择整理范围</h1>
+          <p>AI 只会处理你勾选的内容</p>
         </div>
-        <p className="stats">
-          已扫描 {bookmarks.length} 条书签，当前选择 {selectedCount} 条。
-        </p>
-        {props.progress ? (
-          <p className="progress">
-            {props.progress.phase === 'taxonomy' ? '生成目录体系' : '分配书签'}
-            ：{props.progress.processed}/{props.progress.total}
-          </p>
-        ) : null}
       </div>
 
-      {scan ? (
-        <div className="card">
-          <h2>书签列表</h2>
-          <div className="scan-list tree">
-            {[...byRoot.entries()].map(([rootId, items]) => (
-              <ul key={rootId}>
-                <li>
-                  <strong>{rootTitles.get(rootId) ?? rootId}</strong>
-                  <ul>
-                    {items.map((b) => (
-                      <li key={b.id}>
-                        <label className="row">
-                          <input
-                            type="checkbox"
-                            checked={!selectedIds || selectedIds.has(b.id)}
-                            onChange={() => toggle(b.id)}
-                          />
-                          <span>
-                            {b.title || b.url}
-                            <span className="badge">{b.path.join(' / ') || '根目录'}</span>
-                          </span>
-                        </label>
-                      </li>
-                    ))}
-                  </ul>
-                </li>
-              </ul>
+      <div className="select-layout">
+        {/* 左栏：按文件夹选择 */}
+        <div className="select-panel">
+          <h3>按文件夹选择</h3>
+          <div className="folder-checkbox-list">
+            {[...folderGroups.entries()].map(([key, group]) => (
+              <label key={key} className="folder-checkbox-item">
+                <input
+                  type="checkbox"
+                  checked={folderSelectionState.get(key) !== 'none'}
+                  ref={(el) => {
+                    if (el) el.indeterminate = folderSelectionState.get(key) === 'some';
+                  }}
+                  onChange={() => toggleFolder(key)}
+                />
+                <span className="folder-name">{group.title}</span>
+                <span className="folder-count">{group.bookmarks.length}</span>
+              </label>
             ))}
           </div>
         </div>
-      ) : null}
+
+        {/* 右栏：逐条管理 */}
+        <div className="select-panel">
+          <div className="select-panel-header">
+            <h3>逐条管理</h3>
+            <div className="select-actions">
+              <button onClick={selectAll}>全选</button>
+              <button onClick={selectNone}>全不选</button>
+            </div>
+          </div>
+          <div className="bookmark-check-list">
+            {bookmarks.map((b) => (
+              <label key={b.id} className="bookmark-check-item">
+                <input
+                  type="checkbox"
+                  checked={!selectedIds || selectedIds.has(b.id)}
+                  onChange={() => toggleBookmark(b.id)}
+                />
+                <img
+                  className="bookmark-favicon"
+                  src={`chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(b.url)}&size=16`}
+                  alt=""
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+                <span className="bookmark-title">{b.title || b.url}</span>
+                {b.path.length > 0 && (
+                  <span className="bookmark-folder-pill">{b.path[b.path.length - 1]}</span>
+                )}
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="select-footer">
+        <span className="select-footer-count">
+          已选 <strong>{selectedCount}</strong> 条书签
+        </span>
+        <div className="btn-row">
+          <button className="btn btn-outline" onClick={props.onBack}>返回</button>
+          <button
+            className="btn btn-primary"
+            onClick={props.onGenerate}
+            disabled={selectedCount === 0}
+          >
+            AI 开始分析 ({selectedCount} 条) →
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ---------- 方案审核页 ----------
+// ===== AI 分析中页 =====
 
-function ReviewPage(props: {
-  taxonomy: string[][];
-  assignments: Assignment[];
-  bookmarksById: Map<string, ScannedBookmark>;
-  onChange: (assignments: Assignment[]) => void;
-  onApply: () => void;
+interface AnalysisStep {
+  title: string;
+  description: string;
+}
+
+const ANALYSIS_STEPS: AnalysisStep[] = [
+  { title: '读取书签数据...', description: '仅读取标题、URL 和当前目录，不访问网页' },
+  { title: '发送至 AI 模型...', description: '使用你自己的 API Key，请求直达服务商' },
+  { title: '解析 AI 建议...', description: '解析结构化 JSON 输出' },
+  { title: '验证目录结构...', description: '本地校验路径合法性和层级深度（最多两级）' },
+  { title: '生成预览...', description: '整理建议已准备好，等待你确认' },
+];
+
+function OrganizingPage(props: {
+  progress: GeneratePlanProgress | null;
+  settings: ModelSettings | null;
 }) {
-  const { assignments } = props;
+  const { progress } = props;
 
-  // 下拉选项 = 目录体系 ∪ 分配结果中已出现的路径（模型偶发返回体系外路径时也可展示与修改）。
-  const options = useMemo(() => {
-    const seen = new Map<string, string[]>();
-    for (const t of props.taxonomy) seen.set(t.join('/'), t);
-    for (const a of assignments) seen.set(a.targetPath.join('/'), a.targetPath);
-    return [...seen.values()];
-  }, [props.taxonomy, assignments]);
-
-  const grouped = useMemo(() => {
-    const groups = new Map<string, Assignment[]>();
-    for (const a of assignments) {
-      const key = a.targetPath.join('/');
-      const group = groups.get(key);
-      if (group) group.push(a);
-      else groups.set(key, [a]);
+  // 根据 progress 推断当前步骤
+  let currentStep = 0;
+  if (progress) {
+    if (progress.phase === 'taxonomy') {
+      currentStep = progress.processed > 0 ? 2 : 1;
+    } else {
+      // assign 阶段
+      currentStep = progress.processed === progress.total ? 4 : 3;
     }
-    return groups;
-  }, [assignments]);
-
-  const exclude = (bookmarkId: string): void => {
-    props.onChange(assignments.filter((a) => a.bookmarkId !== bookmarkId));
-  };
-
-  const move = (bookmarkId: string, path: string[]): void => {
-    props.onChange(
-      assignments.map((a) =>
-        a.bookmarkId === bookmarkId ? { ...a, targetPath: path } : a,
-      ),
-    );
-  };
+  }
 
   return (
-    <div className="container">
-      <div className="card">
-        <h2>方案审核</h2>
-        <p className="muted">
-          共 {assignments.length} 条书签将被移动。可以逐条排除或修改目标目录，确认后一键应用。
-        </p>
-        <button className="primary" onClick={props.onApply}>
-          一键应用
-        </button>
+    <div className="page-container">
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1>AI 正在分析</h1>
+          <p>根据标题、URL 和当前目录生成分类建议</p>
+        </div>
       </div>
 
-      <div className="card tree">
-        {[...grouped.entries()].map(([path, items]) => (
-          <div key={path}>
-            <h2>
-              📁 {path}
-              <span className="badge">{items.length}</span>
-            </h2>
-            <ul>
-              {items.map((a) => {
-                const bookmark = props.bookmarksById.get(a.bookmarkId);
-                return (
-                  <li key={a.bookmarkId} className="row">
-                    <span>{bookmark?.title ?? a.bookmarkId}</span>
-                    <select
-                      value={a.targetPath.join('/')}
-                      onChange={(e) => move(a.bookmarkId, e.target.value.split('/'))}
-                    >
-                      {options.map((t) => (
-                        <option key={t.join('/')} value={t.join('/')}>
-                          {t.join('/')}
-                        </option>
-                      ))}
-                    </select>
-                    <button onClick={() => exclude(a.bookmarkId)}>排除</button>
-                  </li>
-                );
-              })}
-            </ul>
+      <div className="step-list">
+        {ANALYSIS_STEPS.map((step, i) => {
+          let status: 'done' | 'active' | 'pending' = 'pending';
+          if (i < currentStep) status = 'done';
+          else if (i === currentStep) status = 'active';
+
+          return (
+            <div key={i} className={`step-card ${status}`}>
+              <div className={`step-icon ${status}`}>
+                {status === 'done' ? '✓' : status === 'active' ? '⟳' : (i + 1)}
+              </div>
+              <div className="step-card-content">
+                <h3>{step.title}</h3>
+                <p>{step.description}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {progress && (
+        <div className="card">
+          <div className="progress-label">
+            <span>{progress.phase === 'taxonomy' ? '生成目录体系' : '分配书签'}</span>
+            <span>{progress.processed}/{progress.total}</span>
           </div>
-        ))}
+          <div className="progress-bar">
+            <div
+              className="progress-fill"
+              style={{ width: `${progress.total > 0 ? (progress.processed / progress.total) * 100 : 0}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="privacy-card">
+        <strong>隐私说明</strong>
+        本次整理仅向 AI 发送书签标题和 URL，不读取网页正文，不记录日志，不上传至本扩展服务器。所有操作在你的浏览器本地执行。
       </div>
     </div>
   );
 }
 
-// ---------- 执行结果页 ----------
+// ===== 预览页 =====
+
+function PreviewPage(props: {
+  assignments: Assignment[];
+  taxonomy: string[][];
+  bookmarksById: Map<string, ScannedBookmark>;
+  onChange: (assignments: Assignment[]) => void;
+  onBack: () => void;
+  onApply: () => void;
+}) {
+  const { assignments, taxonomy, bookmarksById } = props;
+  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+
+  // 构建树结构
+  const tree = useMemo(() => {
+    type TreeNode = {
+      name: string;
+      isNew: boolean;
+      children: TreeNode[];
+      bookmarks: { id: string; title: string; url: string; excluded: boolean }[];
+    };
+    const root: TreeNode[] = [];
+
+    // 收集所有目标路径
+    const existingFolders = new Set(taxonomy.flat());
+    const grouped = new Map<string, Assignment[]>();
+    for (const a of assignments) {
+      const key = a.targetPath.join('/');
+      const group = grouped.get(key);
+      if (group) group.push(a);
+      else grouped.set(key, [a]);
+    }
+
+    for (const [pathStr, items] of grouped) {
+      const parts = pathStr.split('/');
+      let nodes = root;
+      let currentPath = '';
+
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i] ?? '';
+        currentPath = currentPath ? `${currentPath}/${part}` : part;
+        let node = nodes.find(n => n.name === part);
+        if (!node) {
+          node = {
+            name: part,
+            isNew: !existingFolders.has(part),
+            children: [],
+            bookmarks: [],
+          };
+          nodes.push(node);
+        }
+        if (i === parts.length - 1) {
+          for (const a of items) {
+            const b = bookmarksById.get(a.bookmarkId);
+            node.bookmarks.push({
+              id: a.bookmarkId,
+              title: b?.title || b?.url || a.bookmarkId,
+              url: b?.url || '',
+              excluded: excludedIds.has(a.bookmarkId),
+            });
+          }
+        }
+        nodes = node.children;
+      }
+    }
+    return root;
+  }, [assignments, taxonomy, bookmarksById, excludedIds]);
+
+  const toggleExclude = (bookmarkId: string) => {
+    const next = new Set(excludedIds);
+    if (next.has(bookmarkId)) next.delete(bookmarkId);
+    else next.add(bookmarkId);
+    setExcludedIds(next);
+    // 更新 assignments：排除的书签从列表移除
+    props.onChange(assignments.filter(a => !next.has(a.bookmarkId)));
+  };
+
+  const activeCount = assignments.length - excludedIds.size;
+  // 统计新建目录数
+  const newFolderCount = useMemo(() => {
+    const existingFolders = new Set(taxonomy.flat());
+    const newFolders = new Set<string>();
+    for (const a of assignments) {
+      for (const part of a.targetPath) {
+        if (!existingFolders.has(part)) newFolders.add(part);
+      }
+    }
+    return newFolders.size;
+  }, [assignments, taxonomy]);
+
+  return (
+    <div className="page-container">
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1>预览整理建议</h1>
+          <p>点击书签可排除或恢复。文件夹标注「新」表示将新建该目录。</p>
+        </div>
+        <div className="page-stats">
+          <div>
+            <div className="page-stat-value">{activeCount}</div>
+            <div className="page-stat-label">将移动</div>
+          </div>
+          <div>
+            <div className="page-stat-value">{newFolderCount}</div>
+            <div className="page-stat-label">新建目录</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span>整理后的书签目录树</span>
+          <span>点击书签行可排除</span>
+        </div>
+        <div className="tree-view">
+          {tree.map(node => (
+            <TreeFolder key={node.name} node={node} onToggle={toggleExclude} />
+          ))}
+        </div>
+      </div>
+
+      <div className="btn-row-spread">
+        <button className="btn btn-outline" onClick={props.onBack}>返回</button>
+        <div className="btn-row">
+          <span style={{ fontSize: '13px', color: '#6b7280' }}>
+            应用前将保存本地快照，可一键撤销
+          </span>
+          <button className="btn btn-primary" onClick={() => void props.onApply()}>
+            一键应用 ({activeCount} 条) →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 树节点组件
+function TreeFolder({ node, onToggle, depth = 0 }: {
+  node: { name: string; isNew: boolean; children: any[]; bookmarks: any[] };
+  onToggle: (id: string) => void;
+  depth?: number;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const totalBookmarks = countBookmarks(node);
+
+  return (
+    <div className="tree-folder">
+      <div className="tree-folder-header" onClick={() => setExpanded(!expanded)}>
+        <span className={`tree-folder-arrow ${!expanded ? 'collapsed' : ''}`}>▾</span>
+        <span className="tree-folder-icon">📁</span>
+        <span className="tree-folder-name">{node.name}</span>
+        {node.isNew && <span className="tree-folder-badge">新</span>}
+        <span className="tree-folder-count">{totalBookmarks}/{totalBookmarks}</span>
+      </div>
+      {expanded && (
+        <div className="tree-folder-children">
+          {node.children.map((child: any) => (
+            <TreeFolder key={child.name} node={child} onToggle={onToggle} depth={depth + 1} />
+          ))}
+          {node.bookmarks.map((b: any) => (
+            <div
+              key={b.id}
+              className={`tree-bookmark ${b.excluded ? 'excluded' : ''}`}
+              onClick={() => onToggle(b.id)}
+            >
+              <img
+                className="tree-bookmark-favicon"
+                src={`chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(b.url)}&size=16`}
+                alt=""
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+              <span className="tree-bookmark-title">{b.title}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function countBookmarks(node: any): number {
+  let count = node.bookmarks.filter((b: any) => !b.excluded).length;
+  for (const child of node.children) count += countBookmarks(child);
+  return count;
+}
+
+// ===== 执行结果页 =====
 
 function ResultPage(props: {
   job: JobState;
+  totalAssignments: number;
   busy: string | null;
   onRetry: () => void;
   onUndo: () => void;
   onCancel: () => void;
   onNewRound: () => void;
 }) {
-  const { job } = props;
+  const { job, totalAssignments } = props;
   const applied = job.appliedIds.length;
   const failures: FailureItem[] = job.failures;
+  const pending = totalAssignments - applied - failures.length;
+  const percent = totalAssignments > 0 ? Math.round((applied / totalAssignments) * 100) : 0;
 
-  const statusText: Record<string, string> = {
-    applying: '正在应用整理方案…',
-    completed: applied > 0 ? `完成：成功移动 ${applied} 条书签。` : '没有需要移动的书签。',
-    interrupted: '已中断。可以从断点继续应用，或撤销已应用的部分。',
-    failed: '应用失败，可重试或撤销。',
-    undoing: '正在撤销…',
-    undone: '已撤销最近一次整理。',
-    partially_undone: '部分撤销成功，存在冲突项（见下方列表），可再次尝试撤销。',
-  };
+  const isApplying = job.status === 'applying' || job.status === 'undoing';
+  const isDone = job.status === 'completed' || job.status === 'undone' || job.status === 'partially_undone';
 
   return (
-    <div className="container">
-      <div className="card">
-        <h2>执行结果</h2>
-        <p className="muted">{statusText[job.status] ?? `状态：${job.status}`}</p>
-        {job.error ? <p className="error">{job.error.message}</p> : null}
-        <div className="row">
-          {(job.status === 'applying' || job.status === 'undoing') && (
-            <button onClick={props.onCancel} disabled={props.busy !== null}>
-              中断
-            </button>
+    <div className="page-container">
+      <div className="page-header">
+        <div className="page-header-left">
+          {isApplying && (
+            <>
+              <h1>正在写入书签</h1>
+              <p>逐条移动，不会删除任何现有书签</p>
+            </>
           )}
-          {(job.status === 'failed' || job.status === 'interrupted') && (
-            <button className="primary" onClick={props.onRetry} disabled={props.busy !== null}>
-              从断点继续 / 重试
-            </button>
+          {job.status === 'completed' && (
+            <>
+              <h1>整理完成</h1>
+              <p>成功移动 {applied} 条书签到新目录</p>
+            </>
           )}
-          {(job.status === 'completed' ||
-            job.status === 'interrupted' ||
-            job.status === 'partially_undone' ||
-            job.status === 'failed') &&
-            applied > 0 && (
-              <button onClick={props.onUndo} disabled={props.busy !== null}>
-                撤销最近一次整理
-              </button>
-            )}
-          <button onClick={props.onNewRound} disabled={props.busy !== null}>
-            开始新一轮整理
-          </button>
+          {job.status === 'undone' && (
+            <>
+              <h1>已撤销</h1>
+              <p>已撤销最近一次整理，书签已还原</p>
+            </>
+          )}
+          {job.status === 'interrupted' && (
+            <>
+              <h1>已中断</h1>
+              <p>可以从断点继续应用，或撤销已应用的部分</p>
+            </>
+          )}
+          {job.status === 'failed' && (
+            <>
+              <h1>应用失败</h1>
+              <p>可重试或撤销</p>
+            </>
+          )}
+          {job.status === 'partially_undone' && (
+            <>
+              <h1>部分撤销</h1>
+              <p>部分撤销成功，存在冲突项，可再次尝试</p>
+            </>
+          )}
         </div>
       </div>
 
-      {failures.length > 0 ? (
+      {/* 进度条（写入中显示） */}
+      {(isApplying || job.status === 'interrupted') && (
         <div className="card">
-          <h2>失败与冲突（{failures.length}）</h2>
-          <ul className="failures">
-            {failures.map((f, i) => (
-              <li key={f.bookmarkId ?? i}>
-                {f.bookmarkId ? `${f.bookmarkId}：` : ''}
-                {f.message}
-              </li>
-            ))}
-          </ul>
+          <div className="progress-label">
+            <span>{applied} / {totalAssignments} 完成</span>
+            <span>{percent}%</span>
+          </div>
+          <div className="progress-bar">
+            <div className="progress-fill" style={{ width: `${percent}%` }} />
+          </div>
         </div>
-      ) : null}
+      )}
+
+      {/* 统计卡片 */}
+      <div className="stat-grid stat-grid-3">
+        <div className="stat-card">
+          <div className="stat-card-value success">{applied}</div>
+          <div className="stat-card-label">已完成</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-card-value">{Math.max(0, pending)}</div>
+          <div className="stat-card-label">待处理</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-card-value muted">{failures.length}</div>
+          <div className="stat-card-label">失败</div>
+        </div>
+      </div>
+
+      {/* 信息提示 */}
+      {isApplying && (
+        <div className="banner banner-info">
+          已保存恢复快照。完成后可在结果页一键撤销本次整理，还原所有书签至原始位置。
+        </div>
+      )}
+
+      {/* 失败详情 */}
+      {failures.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <span>失败详情 ({failures.length})</span>
+          </div>
+          {failures.map((f, i) => (
+            <div key={f.bookmarkId ?? i} className="banner banner-error" style={{ marginBottom: '8px' }}>
+              {f.bookmarkId ? `${f.bookmarkId}：` : ''}{f.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 错误信息 */}
+      {job.error && <div className="banner banner-error">{job.error.message}</div>}
+
+      {/* 操作按钮 */}
+      <div className="btn-row" style={{ marginTop: '24px', justifyContent: 'center', flexWrap: 'wrap' }}>
+        {isApplying && (
+          <button className="btn btn-outline" onClick={props.onCancel} disabled={props.busy !== null}>
+            中断
+          </button>
+        )}
+        {(job.status === 'failed' || job.status === 'interrupted') && (
+          <button className="btn btn-primary" onClick={props.onRetry} disabled={props.busy !== null}>
+            从断点继续
+          </button>
+        )}
+        {isDone && applied > 0 && (
+          <button className="btn btn-outline" onClick={props.onUndo} disabled={props.busy !== null}>
+            撤销本次整理
+          </button>
+        )}
+        {!isApplying && (
+          <button className="btn btn-primary" onClick={props.onNewRound} disabled={props.busy !== null}>
+            开始新一轮整理
+          </button>
+        )}
+      </div>
     </div>
   );
 }
