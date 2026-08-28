@@ -163,6 +163,8 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [selectedIds, setSelectedIds] = useState<Set<string> | null>(null);
   const jobIdRef = useRef<string>(crypto.randomUUID());
+  // 用户在“AI 分析中”页点击返回时置位，避免异步方案结果强制跳转到预览页
+  const organizingAbortRef = useRef(false);
 
   // 初始化：加载设置 + GET_STATUS 恢复界面
   useEffect(() => {
@@ -255,6 +257,7 @@ export default function App() {
             }
           }}
           onNext={() => dispatch({ type: 'view', view: 'select' })}
+          onBack={() => dispatch({ type: 'view', view: 'settings' })}
         />
       )}
 
@@ -266,6 +269,7 @@ export default function App() {
           onBack={() => dispatch({ type: 'view', view: 'scan' })}
           onGenerate={async () => {
             if (!state.settings) return;
+            organizingAbortRef.current = false;
             dispatch({ type: 'view', view: 'organizing' });
             dispatch({ type: 'busy', busy: '正在生成整理方案' });
             try {
@@ -291,8 +295,11 @@ export default function App() {
                 folderNames,
                 (p) => dispatch({ type: 'planProgress', progress: p }),
               );
+              // 用户已返回上一步，丢弃本次结果，避免强制跳转
+              if (organizingAbortRef.current) return;
               dispatch({ type: 'planDone', plan });
             } catch (error) {
+              if (organizingAbortRef.current) return;
               dispatch({ type: 'error', error: classifyError(error).message });
               dispatch({ type: 'view', view: 'select' });
             } finally {
@@ -306,6 +313,11 @@ export default function App() {
         <OrganizingPage
           progress={state.progress}
           settings={state.settings}
+          onBack={() => {
+            organizingAbortRef.current = true;
+            dispatch({ type: 'busy', busy: null });
+            dispatch({ type: 'view', view: 'select' });
+          }}
         />
       )}
 
@@ -538,6 +550,7 @@ function ScanPage(props: {
   busy: string | null;
   onScan: () => void;
   onNext: () => void;
+  onBack: () => void;
 }) {
   const { scan } = props;
   const bookmarkCount = scan?.bookmarks.length ?? 0;
@@ -591,12 +604,19 @@ function ScanPage(props: {
               <div className="stat-card-label">无标题</div>
             </div>
           </div>
-
-          <button className="btn btn-primary btn-full" onClick={props.onNext}>
-            选择整理范围 →
-          </button>
         </>
       )}
+
+      <div className="btn-row" style={{ marginTop: '16px' }}>
+        <button className="btn btn-outline" onClick={props.onBack}>
+          ← 上一步
+        </button>
+        {scan && (
+          <button className="btn btn-primary" style={{ flex: 1 }} onClick={props.onNext}>
+            选择整理范围 →
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -944,6 +964,7 @@ const ANALYSIS_STEPS: AnalysisStep[] = [
 function OrganizingPage(props: {
   progress: GeneratePlanProgress | null;
   settings: ModelSettings | null;
+  onBack: () => void;
 }) {
   const { progress } = props;
 
@@ -1005,6 +1026,12 @@ function OrganizingPage(props: {
       <div className="privacy-card">
         <strong>隐私说明</strong>
         本次整理仅向 AI 发送书签标题和 URL，不读取网页正文，不记录日志，不上传至本扩展服务器。所有操作在你的浏览器本地执行。
+      </div>
+
+      <div className="btn-row" style={{ marginTop: '16px' }}>
+        <button className="btn btn-outline" onClick={props.onBack}>
+          ← 上一步
+        </button>
       </div>
     </div>
   );
