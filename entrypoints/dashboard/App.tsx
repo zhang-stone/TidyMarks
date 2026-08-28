@@ -15,6 +15,7 @@ import {
   type FailureItem,
   type JobState,
   type ModelSettings,
+  type OrganizeMode,
   type PlanRecord,
   type ScanResult,
   type ScannedBookmark,
@@ -267,7 +268,7 @@ export default function App() {
           selectedIds={selectedIds}
           onSelect={setSelectedIds}
           onBack={() => dispatch({ type: 'view', view: 'scan' })}
-          onGenerate={async () => {
+          onGenerate={async (mode) => {
             if (!state.settings) return;
             organizingAbortRef.current = false;
             dispatch({ type: 'view', view: 'organizing' });
@@ -289,7 +290,15 @@ export default function App() {
                       failures: [],
                     };
               const plan = await generatePlan(
-                { model: client, storage },
+                {
+                  model: client,
+                  storage,
+                  mode,
+                  existingFolderPaths: (state.scan?.folders ?? []).map((folder) => ({
+                    rootId: folder.rootId,
+                    path: folder.path,
+                  })),
+                },
                 currentJob,
                 selectedBookmarks,
                 folderNames,
@@ -689,7 +698,7 @@ export function SelectPage(props: {
   selectedIds: Set<string> | null;
   onSelect: (ids: Set<string> | null) => void;
   onBack: () => void;
-  onGenerate: () => void;
+  onGenerate: (mode: OrganizeMode) => void;
 }) {
   const { scan, selectedIds } = props;
   const bookmarks = scan.bookmarks;
@@ -700,6 +709,7 @@ export function SelectPage(props: {
   const tree = useMemo(() => buildFolderTree(scan), [scan]);
   const folderMap = useMemo(() => buildFolderMap(tree), [tree]);
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+  const [organizeMode, setOrganizeMode] = useState<OrganizeMode>('conservative');
 
   const collection = useMemo(() => createTreeCollection({
     rootNode: { id: 'root', name: 'Root', children: tree, bookmarkIds: [] },
@@ -927,6 +937,43 @@ export function SelectPage(props: {
         </div>
       </div>
 
+      <fieldset className="organize-mode-fieldset">
+        <legend className="sr-only">选择整理模式</legend>
+        <div className="organize-mode-grid">
+          <label className={`organize-mode-card ${organizeMode === 'conservative' ? 'selected' : ''}`}>
+            <input
+              type="radio"
+              name="organize-mode"
+              value="conservative"
+              checked={organizeMode === 'conservative'}
+              onChange={() => setOrganizeMode('conservative')}
+            />
+            <span className="organize-mode-icon" aria-hidden="true">☷</span>
+            <span className="organize-mode-copy">
+              <strong>保守整理</strong>
+              <span>保留现有目录结构，仅将书签移入最合适的已有文件夹</span>
+            </span>
+            <span className="organize-mode-indicator" aria-hidden="true" />
+          </label>
+
+          <label className={`organize-mode-card ${organizeMode === 'reorganize' ? 'selected' : ''}`}>
+            <input
+              type="radio"
+              name="organize-mode"
+              value="reorganize"
+              checked={organizeMode === 'reorganize'}
+              onChange={() => setOrganizeMode('reorganize')}
+            />
+            <span className="organize-mode-icon" aria-hidden="true">☷</span>
+            <span className="organize-mode-copy">
+              <strong>重新规划目录</strong>
+              <span>AI 自由设计全新的目录体系，适合书签杂乱需要彻底整理的情况</span>
+            </span>
+            <span className="organize-mode-indicator" aria-hidden="true" />
+          </label>
+        </div>
+      </fieldset>
+
       <div className="select-footer">
         <button className="btn btn-outline" onClick={props.onBack}>
           ← 返回
@@ -936,7 +983,7 @@ export function SelectPage(props: {
         </span>
         <button
           className="btn btn-primary"
-          onClick={props.onGenerate}
+          onClick={() => props.onGenerate(organizeMode)}
           disabled={selectedCount === 0}
         >
           AI 开始分析 ({selectedCount} 条) →

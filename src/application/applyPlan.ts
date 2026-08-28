@@ -24,6 +24,11 @@ export interface ApplyResult {
   failures: FailureItem[];
 }
 
+export interface ApplyPlanOptions {
+  /** 保守模式关闭目录创建；目标目录已不存在时只跳过对应书签。 */
+  createMissingFolders?: boolean;
+}
+
 interface ResolvedTarget {
   rootId: string;
   /** 目标叶子目录 ID。 */
@@ -47,9 +52,11 @@ export async function applyPlan(
   job: JobState,
   bookmarks: ScannedBookmark[],
   assignments: Assignment[],
+  options: ApplyPlanOptions = {},
 ): Promise<ApplyResult> {
   const { storage, events } = deps;
   const now = deps.now ?? (() => Date.now());
+  const createMissingFolders = options.createMissingFolders ?? true;
 
   if (isWriteLocked(job.status) && job.status !== 'applying') {
     // undoing 期间拒绝新的应用请求。
@@ -120,7 +127,7 @@ export async function applyPlan(
   const createdIds = new Set(createdFolders.map((f) => f.id));
   const folderCache = new Map<string, string>(); // `${rootId}|${path.join('/')}` -> folderId
 
-  const resolveFolder = async (rootId: string, path: string[]): Promise<ResolvedTarget> => {
+  const resolveFolder = async (rootId: string, path: string[]): Promise<ResolvedTarget | null> => {
     const key = `${rootId}|${path.map((s) => s.toLowerCase()).join(' ')}`;
     const cached = folderCache.get(key);
     if (cached) return { rootId, folderId: cached };
@@ -137,6 +144,7 @@ export async function applyPlan(
       if (hit) {
         parentId = hit.id;
       } else {
+        if (!createMissingFolders) return null;
         const created = await deps.bookmarks.createFolder(parentId, segment);
         const node: BookmarkNode = { id: created.id, parentId, title: segment };
         childrenByParent.set(created.id, []);
@@ -155,14 +163,31 @@ export async function applyPlan(
   };
 
   const resolvedTargets = new Map<string, ResolvedTarget>();
+  const resolutionFailures: FailureItem[] = [];
   for (const { bookmark, assignment } of ordered) {
     if (working.appliedIds.includes(bookmark.id) || missing.has(bookmark.id)) continue;
     const target = await resolveFolder(bookmark.rootId, assignment.targetPath);
+    if (!target) {
+      resolutionFailures.push({
+        bookmarkId: bookmark.id,
+        kind: 'validation',
+        message: '保守模式的目标文件夹已不存在，已跳过',
+      });
+      continue;
+    }
     resolvedTargets.set(bookmark.id, target);
     const move = moves.find((m) => m.bookmarkId === bookmark.id);
     if (move) move.toFolderId = target.folderId;
     // 新建目录即时持久化，保证中断后目录不丢。
     working = { ...working, createdFolderIds: createdFolders.map((f) => f.id), updatedAt: now() };
+    await storage.saveJob(working);
+  }
+  if (resolutionFailures.length > 0) {
+    working = {
+      ...working,
+      failures: [...working.failures, ...resolutionFailures],
+      updatedAt: now(),
+    };
     await storage.saveJob(working);
   }
 

@@ -3,6 +3,7 @@ import type { Assignment, ScannedBookmark } from '../../shared/schemas';
 /** 目录名最大长度，避免个别服务对超长标题的处理差异。 */
 export const MAX_SEGMENT_LENGTH = 100;
 export const MAX_PATH_DEPTH = 2;
+export const MAX_EXISTING_PATH_DEPTH = 100;
 
 const CONTROL_CHARS = new RegExp('[\\u0000-\\u001F\\u007F]', 'g');
 
@@ -16,14 +17,17 @@ export function sanitizeFolderName(name: string): string {
 }
 
 /**
- * 规整目标路径：逐段清理、去掉空段、最多两级。
+ * 规整目标路径：逐段清理、去掉空段，默认最多两级。
  * 路径无效（清理后为空）时返回 null。
  */
-export function normalizeTargetPath(path: string[]): string[] | null {
+export function normalizeTargetPath(
+  path: string[],
+  maxDepth = MAX_PATH_DEPTH,
+): string[] | null {
   const segments = path
     .map((s) => sanitizeFolderName(s))
     .filter((s) => s.length > 0)
-    .slice(0, MAX_PATH_DEPTH);
+    .slice(0, maxDepth);
   return segments.length > 0 ? segments : null;
 }
 
@@ -51,11 +55,12 @@ export interface AssignmentValidation {
  * 校验模型产出的一批分配结果（架构方案第 6.3 节）：
  * - bookmarkId 必须属于本次选择范围；
  * - 每条书签最多一个目标（重复取第一条，其余进入 rejected）；
- * - 路径非空、层级不超过两级、名称经过清理。
+ * - 路径非空、名称经过清理；重新规划最多两级，保守模式必须命中已有路径白名单。
  */
 export function validateAssignmentBatch(
   raw: Array<{ bookmarkId: string; targetPath: string[]; reason?: string }>,
   allowedBookmarkIds: ReadonlySet<string>,
+  allowedExistingPaths?: ReadonlyMap<string, readonly string[][]>,
 ): AssignmentValidation {
   const valid: Assignment[] = [];
   const rejected: Array<{ bookmarkId: string; reason: string }> = [];
@@ -70,10 +75,24 @@ export function validateAssignmentBatch(
       rejected.push({ bookmarkId: item.bookmarkId, reason: 'duplicate_target' });
       continue;
     }
-    const path = normalizeTargetPath(item.targetPath);
+    const maxDepth = allowedExistingPaths ? MAX_EXISTING_PATH_DEPTH : MAX_PATH_DEPTH;
+    const path = normalizeTargetPath(item.targetPath, maxDepth);
     if (!path) {
       rejected.push({ bookmarkId: item.bookmarkId, reason: 'invalid_path' });
       continue;
+    }
+    if (allowedExistingPaths) {
+      const allowed = allowedExistingPaths.get(item.bookmarkId) ?? [];
+      const pathKey = path.map((segment) => segment.toLocaleLowerCase()).join('\u0000');
+      const isExisting = allowed.some(
+        (candidate) =>
+          candidate.map((segment) => sanitizeFolderName(segment).toLocaleLowerCase()).join('\u0000') ===
+          pathKey,
+      );
+      if (!isExisting) {
+        rejected.push({ bookmarkId: item.bookmarkId, reason: 'non_existing_path' });
+        continue;
+      }
     }
     seen.add(item.bookmarkId);
     valid.push({ bookmarkId: item.bookmarkId, targetPath: path, reason: item.reason });

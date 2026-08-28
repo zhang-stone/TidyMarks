@@ -22,6 +22,18 @@
 
 * { box-sizing: border-box; }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -687,6 +699,106 @@ body {
   font-size: 14px;
 }
 
+/* 整理模式 */
+.organize-mode-fieldset {
+  min-width: 0;
+  margin: 24px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.organize-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.organize-mode-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  min-height: 104px;
+  gap: 14px;
+  padding: 20px 54px 20px 20px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.organize-mode-card:hover {
+  border-color: #c7d2fe;
+}
+
+.organize-mode-card.selected {
+  border-color: var(--primary);
+  background: var(--info-bg);
+  box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.05);
+}
+
+.organize-mode-card input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.organize-mode-card:focus-within {
+  outline: 3px solid rgba(79, 70, 229, 0.2);
+  outline-offset: 2px;
+}
+
+.organize-mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  background: #f1f5f9;
+  color: #818cf8;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.organize-mode-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.organize-mode-copy strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.organize-mode-card.selected .organize-mode-copy strong {
+  color: var(--primary);
+}
+
+.organize-mode-copy span {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.organize-mode-indicator {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #d1d5db;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.organize-mode-card.selected .organize-mode-indicator {
+  border: 6px solid var(--primary);
+}
+
 .select-footer {
   display: flex;
   justify-content: space-between;
@@ -703,6 +815,12 @@ body {
 
 .select-footer-count strong {
   color: var(--primary);
+}
+
+@media (max-width: 760px) {
+  .organize-mode-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ===== 预览树 ===== */

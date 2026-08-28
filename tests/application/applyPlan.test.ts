@@ -128,4 +128,26 @@ describe('applyPlan', () => {
     ]);
     expect(result.appliedIds.sort()).toEqual(['100', '102']);
   });
+
+  it('保守模式不创建已不存在的目标目录', async () => {
+    const bm = createMemoryBookmarks(tree);
+    const storage = createMemoryStorage();
+    const result = await applyPlan(
+      { bookmarks: bm, storage },
+      makeJob(),
+      bookmarks,
+      [assignments[0]!],
+      { createMissingFolders: false },
+    );
+
+    expect(bm.nodes().some((node) => node.title === '开发')).toBe(false);
+    expect(result.appliedIds).toEqual([]);
+    expect(result.failures).toEqual([
+      {
+        bookmarkId: '100',
+        kind: 'validation',
+        message: '保守模式的目标文件夹已不存在，已跳过',
+      },
+    ]);
+  });
 });

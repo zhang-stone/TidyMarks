@@ -72,8 +72,15 @@ export type ScanResult = z.infer<typeof ScanResultSchema>;
 // ---------- 分类方案 ----------
 
 const PathSegmentSchema = z.string().min(1).max(100);
-/** AI 路径最多两级、至少一级（“未分类”等单级目录也合法）。 */
-export const TargetPathSchema = z.array(PathSegmentSchema).min(1).max(2);
+/**
+ * 保守模式需要完整复用用户已有的深层目录；重新规划模式仍在业务层限制为最多两级。
+ * 这里保留一个宽松但有上限的持久化边界，避免合法的现有目录在读取时被丢弃。
+ */
+export const TargetPathSchema = z.array(PathSegmentSchema).min(1).max(100);
+
+export const ORGANIZE_MODES = ['conservative', 'reorganize'] as const;
+export const OrganizeModeSchema = z.enum(ORGANIZE_MODES);
+export type OrganizeMode = z.infer<typeof OrganizeModeSchema>;
 
 export const AssignmentSchema = z.object({
   bookmarkId: z.string(),
@@ -85,12 +92,14 @@ export type Assignment = z.infer<typeof AssignmentSchema>;
 export const PlanRecordSchema = z.object({
   jobId: z.string(),
   createdAt: z.number(),
+  /** 旧方案默认按历史行为视为“重新规划目录”。 */
+  mode: OrganizeModeSchema.default('reorganize'),
   phase: z.enum(['taxonomy', 'assign', 'done']),
   /** 分类体系阶段各批次产出的候选目录，用于断点续跑。 */
   taxonomyCandidates: z.array(z.array(PathSegmentSchema).min(1).max(2)).default([]),
   /** 已完成的分类体系批次数。 */
   taxonomyCursor: z.number().int().nonnegative().default(0),
-  /** 合并后的最终目录体系，全部为不超过两级的路径。 */
+  /** 最终目录体系；重新规划模式最多两级，保守模式可保留现有深层路径。 */
   taxonomy: z.array(TargetPathSchema).default([]),
   assignments: z.array(AssignmentSchema).default([]),
   /** 已完成分配的书签数游标，恢复时从这里继续。 */
@@ -184,3 +193,14 @@ export const ModelAssignmentBatchSchema = z.object({
   ),
 });
 export type ModelAssignmentBatch = z.infer<typeof ModelAssignmentBatchSchema>;
+
+/** 保守模式可返回用户已有的深层路径，随后还会逐条校验是否命中白名单。 */
+export const ModelConservativeAssignmentBatchSchema = z.object({
+  assignments: z.array(
+    z.object({
+      bookmarkId: z.string(),
+      targetPath: z.array(z.string()).min(1).max(100),
+      reason: z.string().optional(),
+    }),
+  ),
+});

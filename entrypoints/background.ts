@@ -98,6 +98,7 @@ async function handleApply(storage: StoragePort, jobId: string): Promise<unknown
     job,
     scan.bookmarks,
     plan.assignments,
+    { createMissingFolders: plan.mode !== 'conservative' },
   );
   return { job: result.job };
 }

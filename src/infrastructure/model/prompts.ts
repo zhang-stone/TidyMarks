@@ -78,3 +78,47 @@ export function assignmentBatchPrompt(
     },
   ];
 }
+
+/**
+ * 保守整理只允许模型从每条书签所在 Chrome 根目录的现有路径中选择。
+ * 按 bookmarkId 提供白名单，避免模型跨系统根目录或臆造新目录。
+ */
+export function conservativeAssignmentBatchPrompt(
+  existingPathsByRoot: ReadonlyMap<string, readonly string[][]>,
+  bookmarks: ScannedBookmark[],
+): ChatMessage[] {
+  const lines = bookmarks.map(bookmarkFeatureLine).join('\n');
+  const bookmarkRoots = Object.fromEntries(
+    bookmarks.map((bookmark) => [bookmark.id, bookmark.rootId]),
+  );
+  const batchRootIds = new Set(bookmarks.map((bookmark) => bookmark.rootId));
+  const allowedTargetsByRoot = Object.fromEntries(
+    [...batchRootIds].map((rootId) => [rootId, existingPathsByRoot.get(rootId) ?? []]),
+  );
+  return [
+    {
+      role: 'system',
+      content: [
+        '你是一个浏览器书签整理助手。当前使用保守整理模式。',
+        '只输出 JSON 对象，不要输出任何解释性文字。',
+        '必须保持用户现有目录结构，只能从给定的已有目录路径中选择，禁止新建或改写目录。',
+      ].join('\n'),
+    },
+    {
+      role: 'user',
+      content: [
+        '下面是书签（id / title / domain / currentPath）：',
+        lines,
+        '',
+        '书签所属的系统根目录如下（仅用于匹配允许列表）：',
+        JSON.stringify(bookmarkRoots),
+        '每个系统根目录允许使用的已有目录路径如下：',
+        JSON.stringify(allowedTargetsByRoot),
+        '',
+        '请为每条书签选择最合适的已有目录，targetPath 必须逐字来自其系统根目录的允许列表。',
+        '输出 JSON：{"assignments": [{"bookmarkId": "<书签id>", "targetPath": ["已有目录路径"], "reason": "<一句话原因>"}]}',
+        '每条书签恰好出现一次；不要输出允许列表以外的路径。',
+      ].join('\n'),
+    },
+  ];
+}
