@@ -64,5 +64,9 @@ describe('选择范围文件夹树', () => {
     expect(html).toContain('保守整理');
     expect(html).toContain('重新规划目录');
     expect(html).toContain('name="organize-mode" checked="" value="conservative"');
+    expect(html).toContain('文件夹命名风格');
+    expect(html).toContain('图标 + 文字');
+    expect(html).toContain('纯文字');
+    expect(html).toContain('name="folder-name-style" checked="" value="emoji"');
   });
 });

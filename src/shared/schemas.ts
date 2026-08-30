@@ -82,6 +82,10 @@ export const ORGANIZE_MODES = ['conservative', 'reorganize'] as const;
 export const OrganizeModeSchema = z.enum(ORGANIZE_MODES);
 export type OrganizeMode = z.infer<typeof OrganizeModeSchema>;
 
+export const FOLDER_NAME_STYLES = ['emoji', 'text'] as const;
+export const FolderNameStyleSchema = z.enum(FOLDER_NAME_STYLES);
+export type FolderNameStyle = z.infer<typeof FolderNameStyleSchema>;
+
 export const AssignmentSchema = z.object({
   bookmarkId: z.string(),
   targetPath: TargetPathSchema,
@@ -94,6 +98,8 @@ export const PlanRecordSchema = z.object({
   createdAt: z.number(),
   /** 旧方案默认按历史行为视为“重新规划目录”。 */
   mode: OrganizeModeSchema.default('reorganize'),
+  /** 旧方案的目录名均为纯文字。 */
+  folderNameStyle: FolderNameStyleSchema.default('text'),
   phase: z.enum(['taxonomy', 'assign', 'done']),
   /** 分类体系阶段各批次产出的候选目录，用于断点续跑。 */
   taxonomyCandidates: z.array(z.array(PathSegmentSchema).min(1).max(2)).default([]),

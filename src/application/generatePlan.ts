@@ -19,6 +19,7 @@ import {
   ModelCandidateBatchSchema,
   ModelConservativeAssignmentBatchSchema,
   ModelTaxonomySchema,
+  type FolderNameStyle,
   type JobState,
   type OrganizeMode,
   type PlanRecord,
@@ -34,6 +35,8 @@ export interface GeneratePlanDeps {
   storage: StoragePort;
   /** 默认保持历史行为：由 AI 重新规划目录。 */
   mode?: OrganizeMode;
+  /** 重新规划目录时的文件夹命名风格。 */
+  folderNameStyle?: FolderNameStyle;
   /** 保守模式可选的现有目录白名单，按 Chrome 系统根目录隔离。 */
   existingFolderPaths?: Array<{ rootId: string; path: string[] }>;
   events?: EventsPort;
@@ -105,6 +108,7 @@ export async function generatePlan(
 ): Promise<PlanRecord> {
   const { model, storage } = deps;
   const mode = deps.mode ?? 'reorganize';
+  const folderNameStyle = deps.folderNameStyle ?? 'text';
   const now = deps.now ?? (() => Date.now());
   const total = bookmarks.length;
   const conservativePaths = existingPathsByRoot(deps.existingFolderPaths ?? []);
@@ -122,12 +126,16 @@ export async function generatePlan(
 
   const existing = await storage.loadPlan();
   const plan: PlanRecord =
-    existing && existing.jobId === job.jobId && (existing.mode ?? 'reorganize') === mode
+    existing &&
+    existing.jobId === job.jobId &&
+    (existing.mode ?? 'reorganize') === mode &&
+    (existing.folderNameStyle ?? 'text') === folderNameStyle
       ? existing
       : {
           jobId: job.jobId,
           createdAt: now(),
           mode,
+          folderNameStyle,
           phase: mode === 'conservative' ? 'assign' : 'taxonomy',
           taxonomyCandidates: [],
           taxonomyCursor: 0,
@@ -159,7 +167,7 @@ export async function generatePlan(
     const taxonomyResults = await Promise.allSettled(
       pendingBatchIndexes.map(async (index) => {
         const content = await model.chat(
-          taxonomyBatchPrompt(batches[index]!, existingFolderNames),
+          taxonomyBatchPrompt(batches[index]!, existingFolderNames, folderNameStyle),
           deps.signal,
         );
         const parsed = parseWith(ModelCandidateBatchSchema, content, '候选目录');
@@ -185,7 +193,10 @@ export async function generatePlan(
       await storage.savePlan(plan);
     }
 
-    const merged = await model.chat(taxonomyMergePrompt(plan.taxonomyCandidates), deps.signal);
+    const merged = await model.chat(
+      taxonomyMergePrompt(plan.taxonomyCandidates, folderNameStyle),
+      deps.signal,
+    );
     const parsedMerge = parseWith(ModelTaxonomySchema, merged, '目录体系');
     plan.taxonomy = dedupeTaxonomy(parsedMerge.categories);
     if (plan.taxonomy.length === 0) {
@@ -211,7 +222,7 @@ export async function generatePlan(
         const content = await model.chat(
           mode === 'conservative'
             ? conservativeAssignmentBatchPrompt(conservativePaths, batch)
-            : assignmentBatchPrompt(plan.taxonomy, batch),
+            : assignmentBatchPrompt(plan.taxonomy, batch, folderNameStyle),
           deps.signal,
         );
         const parsed =

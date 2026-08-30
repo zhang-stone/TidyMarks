@@ -1,5 +1,5 @@
 import type { ChatMessage } from '../../application/ports';
-import type { ScannedBookmark } from '../../shared/schemas';
+import type { FolderNameStyle, ScannedBookmark } from '../../shared/schemas';
 import { bookmarkFeatureLine } from '../../domain/organize/plan';
 
 /**
@@ -9,20 +9,28 @@ import { bookmarkFeatureLine } from '../../domain/organize/plan';
  * - 分配阶段只允许返回 bookmarkId / targetPath / reason（架构方案第 6.3 节）。
  */
 
-const SYSTEM = [
-  '你是一个浏览器书签整理助手，负责把用户的书签分类到清晰的目录体系。',
-  '只输出 JSON 对象，不要输出任何解释性文字。',
-  '目录名使用书签内容的主要语言，简短、具体、可数；不要使用“其他”“杂项”这类兜底目录，除非确实无法归类。',
-  '目录路径最多两级（["一级"] 或 ["一级","二级"]）。',
-].join('\n');
+function systemPrompt(folderNameStyle: FolderNameStyle): string {
+  const namingRule =
+    folderNameStyle === 'emoji'
+      ? '每个目录名必须以一个语义匹配的 emoji 开头，格式如“💻 开发工具”，让目录便于一眼辨认。'
+      : '目录名只使用文字，不要包含 emoji 或其他图标，保持简洁。';
+  return [
+    '你是一个浏览器书签整理助手，负责把用户的书签分类到清晰的目录体系。',
+    '只输出 JSON 对象，不要输出任何解释性文字。',
+    '目录名使用书签内容的主要语言，简短、具体、可数；不要使用“其他”“杂项”这类兜底目录，除非确实无法归类。',
+    namingRule,
+    '目录路径最多两级（["一级"] 或 ["一级","二级"]）。',
+  ].join('\n');
+}
 
 export function taxonomyBatchPrompt(
   bookmarks: ScannedBookmark[],
   existingFolderNames: string[],
+  folderNameStyle: FolderNameStyle = 'text',
 ): ChatMessage[] {
   const lines = bookmarks.map(bookmarkFeatureLine).join('\n');
   return [
-    { role: 'system', content: SYSTEM },
+    { role: 'system', content: systemPrompt(folderNameStyle) },
     {
       role: 'user',
       content: [
@@ -39,9 +47,12 @@ export function taxonomyBatchPrompt(
   ];
 }
 
-export function taxonomyMergePrompt(candidates: string[][]): ChatMessage[] {
+export function taxonomyMergePrompt(
+  candidates: string[][],
+  folderNameStyle: FolderNameStyle = 'text',
+): ChatMessage[] {
   return [
-    { role: 'system', content: SYSTEM },
+    { role: 'system', content: systemPrompt(folderNameStyle) },
     {
       role: 'user',
       content: [
@@ -59,10 +70,11 @@ export function taxonomyMergePrompt(candidates: string[][]): ChatMessage[] {
 export function assignmentBatchPrompt(
   taxonomy: string[][],
   bookmarks: ScannedBookmark[],
+  folderNameStyle: FolderNameStyle = 'text',
 ): ChatMessage[] {
   const lines = bookmarks.map(bookmarkFeatureLine).join('\n');
   return [
-    { role: 'system', content: SYSTEM },
+    { role: 'system', content: systemPrompt(folderNameStyle) },
     {
       role: 'user',
       content: [

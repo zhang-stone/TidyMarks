@@ -13,6 +13,7 @@ import {
   ModelSettingsSchema,
   type Assignment,
   type FailureItem,
+  type FolderNameStyle,
   type JobState,
   type ModelSettings,
   type OrganizeMode,
@@ -42,7 +43,7 @@ interface AppState {
 type Action =
   | { type: 'init'; settings: ModelSettings | null; status: ResumeView }
   | { type: 'view'; view: View }
-  | { type: 'settingsSaved'; settings: ModelSettings }
+  | { type: 'settingsSaved'; settings: ModelSettings; view: View }
   | { type: 'scanDone'; scan: ScanResult; job: JobState }
   | { type: 'planProgress'; progress: GeneratePlanProgress }
   | { type: 'planDone'; plan: PlanRecord }
@@ -52,7 +53,7 @@ type Action =
   | { type: 'error'; error: string | null };
 
 const initialState: AppState = {
-  view: 'settings',
+  view: 'scan',
   settings: null,
   job: null,
   scan: null,
@@ -74,7 +75,7 @@ function viewForStatus(status: ResumeView): View {
   if (status.scan) {
     return 'scan';
   }
-  return 'settings';
+  return 'scan';
 }
 
 function reducer(state: AppState, action: Action): AppState {
@@ -86,12 +87,12 @@ function reducer(state: AppState, action: Action): AppState {
         job: action.status.job,
         scan: action.status.scan,
         plan: action.status.plan,
-        view: action.settings ? viewForStatus(action.status) : 'settings',
+        view: viewForStatus(action.status),
       };
     case 'view':
       return { ...state, view: action.view, error: null, progress: null };
     case 'settingsSaved':
-      return { ...state, settings: action.settings, view: 'scan' };
+      return { ...state, settings: action.settings, view: action.view, error: null };
     case 'scanDone':
       return { ...state, scan: action.scan, job: action.job, view: 'scan' };
     case 'planProgress':
@@ -118,8 +119,8 @@ function reducer(state: AppState, action: Action): AppState {
 // ===== 步骤配置 =====
 
 const STEPS = [
-  { key: 'settings', label: '配置', num: 1 },
-  { key: 'scan', label: '扫描', num: 2 },
+  { key: 'scan', label: '扫描', num: 1 },
+  { key: 'select', label: '选择', num: 2 },
   { key: 'organizing', label: '整理', num: 3 },
   { key: 'preview', label: '预览', num: 4 },
   { key: 'result', label: '完成', num: 5 },
@@ -127,8 +128,8 @@ const STEPS = [
 
 function getActiveStep(view: View, jobStatus?: string): number {
   switch (view) {
-    case 'settings': return 1;
-    case 'scan': return 2;
+    case 'settings': return 0;
+    case 'scan': return 1;
     case 'select': return 2;
     case 'organizing': return 3;
     case 'preview': return 4;
@@ -140,22 +141,6 @@ function getActiveStep(view: View, jobStatus?: string): number {
   }
 }
 
-function getHeaderTitle(view: View, jobStatus?: string): string {
-  switch (view) {
-    case 'settings': return '配置';
-    case 'scan': return '扫描结果';
-    case 'select': return '选择范围';
-    case 'organizing': return 'AI 分析中';
-    case 'preview': return '确认建议';
-    case 'result':
-      if (jobStatus === 'applying') return '写入中...';
-      if (jobStatus === 'undoing') return '撤销中...';
-      if (jobStatus === 'completed') return '已完成';
-      return '执行结果';
-    default: return '';
-  }
-}
-
 // ===== 根组件 =====
 
 const storage = createStorageRepository(chrome.storage.local);
@@ -164,6 +149,7 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [selectedIds, setSelectedIds] = useState<Set<string> | null>(null);
   const jobIdRef = useRef<string>(crypto.randomUUID());
+  const settingsReturnViewRef = useRef<View>('scan');
   // 用户在“AI 分析中”页点击返回时置位，避免异步方案结果强制跳转到预览页
   const organizingAbortRef = useRef(false);
 
@@ -227,17 +213,31 @@ export default function App() {
   );
 
   const activeStep = getActiveStep(state.view, state.job?.status);
-  const headerTitle = getHeaderTitle(state.view, state.job?.status);
+  const openSettings = () => {
+    if (state.view !== 'settings') settingsReturnViewRef.current = state.view;
+    dispatch({ type: 'view', view: 'settings' });
+  };
+  const closeSettings = () => {
+    dispatch({ type: 'view', view: settingsReturnViewRef.current });
+  };
 
   return (
     <>
-      <AppHeader activeStep={activeStep} title={headerTitle} />
+      <AppHeader
+        activeStep={activeStep}
+        settingsOpen={state.view === 'settings'}
+        onOpenSettings={openSettings}
+        onCloseSettings={closeSettings}
+      />
       {state.error && <div className="page-container"><div className="banner banner-error">{state.error}</div></div>}
 
       {state.view === 'settings' && (
         <SettingsPage
           initial={state.settings}
-          onSaved={(settings) => dispatch({ type: 'settingsSaved', settings })}
+          onSaved={(settings) =>
+            dispatch({ type: 'settingsSaved', settings, view: settingsReturnViewRef.current })
+          }
+          onCancel={closeSettings}
           onError={(message) => dispatch({ type: 'error', error: message })}
         />
       )}
@@ -258,7 +258,6 @@ export default function App() {
             }
           }}
           onNext={() => dispatch({ type: 'view', view: 'select' })}
-          onBack={() => dispatch({ type: 'view', view: 'settings' })}
         />
       )}
 
@@ -268,8 +267,13 @@ export default function App() {
           selectedIds={selectedIds}
           onSelect={setSelectedIds}
           onBack={() => dispatch({ type: 'view', view: 'scan' })}
-          onGenerate={async (mode) => {
-            if (!state.settings) return;
+          onGenerate={async (mode, folderNameStyle) => {
+            if (!state.settings) {
+              settingsReturnViewRef.current = 'select';
+              dispatch({ type: 'view', view: 'settings' });
+              dispatch({ type: 'error', error: '请先完成模型设置' });
+              return;
+            }
             organizingAbortRef.current = false;
             dispatch({ type: 'view', view: 'organizing' });
             dispatch({ type: 'busy', busy: '正在生成整理方案' });
@@ -294,6 +298,7 @@ export default function App() {
                   model: client,
                   storage,
                   mode,
+                  folderNameStyle,
                   existingFolderPaths: (state.scan?.folders ?? []).map((folder) => ({
                     rootId: folder.rootId,
                     path: folder.path,
@@ -385,9 +390,14 @@ export default function App() {
 
 // ===== 顶部导航栏 =====
 
-function AppHeader({ activeStep, title }: { activeStep: number; title: string }) {
+function AppHeader(props: {
+  activeStep: number;
+  settingsOpen: boolean;
+  onOpenSettings: () => void;
+  onCloseSettings: () => void;
+}) {
   return (
-    <header className="app-header">
+    <header className={`app-header ${props.settingsOpen ? 'settings-open' : ''}`}>
       <div className="app-logo">
         <div className="app-logo-icon">
           <svg viewBox="0 0 24 24">
@@ -397,30 +407,39 @@ function AppHeader({ activeStep, title }: { activeStep: number; title: string })
         <span>TidyMarks</span>
       </div>
 
-      <div className="step-indicator">
-        {STEPS.map((step, i) => (
-          <span key={step.key} style={{ display: 'flex', alignItems: 'center' }}>
-            <div className="step-item">
-              <div
-                className={`step-circle ${
-                  step.num < activeStep ? 'completed' :
-                  step.num === activeStep ? 'active' : ''
-                }`}
-              >
-                {step.num < activeStep ? '✓' : step.num}
+      {props.settingsOpen ? (
+        <div className="settings-header-title">模型设置</div>
+      ) : (
+        <div className="step-indicator">
+          {STEPS.map((step, i) => (
+            <span key={step.key} style={{ display: 'flex', alignItems: 'center' }}>
+              <div className="step-item">
+                <div
+                  className={`step-circle ${
+                    step.num < props.activeStep ? 'completed' :
+                    step.num === props.activeStep ? 'active' : ''
+                  }`}
+                >
+                  {step.num < props.activeStep ? '✓' : step.num}
+                </div>
+                <span className={`step-label ${step.num === props.activeStep ? 'active' : ''}`}>
+                  {step.label}
+                </span>
               </div>
-              <span className={`step-label ${step.num === activeStep ? 'active' : ''}`}>
-                {step.label}
-              </span>
-            </div>
-            {i < STEPS.length - 1 && (
-              <div className={`step-connector ${step.num < activeStep ? 'completed' : ''}`} />
-            )}
-          </span>
-        ))}
-      </div>
+              {i < STEPS.length - 1 && (
+                <div className={`step-connector ${step.num < props.activeStep ? 'completed' : ''}`} />
+              )}
+            </span>
+          ))}
+        </div>
+      )}
 
-      <div className="header-title">{title}</div>
+      <button
+        className={`header-settings-btn ${props.settingsOpen ? 'active' : ''}`}
+        onClick={props.settingsOpen ? props.onCloseSettings : props.onOpenSettings}
+      >
+        ⚙ {props.settingsOpen ? '关闭设置' : '设置'}
+      </button>
     </header>
   );
 }
@@ -430,6 +449,7 @@ function AppHeader({ activeStep, title }: { activeStep: number; title: string })
 function SettingsPage(props: {
   initial: ModelSettings | null;
   onSaved: (settings: ModelSettings) => void;
+  onCancel: () => void;
   onError: (message: string) => void;
 }) {
   const [baseUrl, setBaseUrl] = useState(props.initial?.baseUrl ?? 'https://api.openai.com/v1');
@@ -487,16 +507,16 @@ function SettingsPage(props: {
   };
 
   return (
-    <div className="page-container">
+    <div className="settings-page-container">
       <div className="page-header">
         <div className="page-header-left">
-          <h1>模型配置</h1>
-          <p>使用你自己的 API Key，数据不经过本扩展服务器</p>
+          <h1>模型设置</h1>
+          <p>使用你自己的 API Key，Key 仅保存在本地，不经过本扩展服务器</p>
         </div>
       </div>
 
-      <div className="card">
-        <div className="field">
+      <div className="settings-card">
+        <div className="settings-field-row">
           <label className="field-label">API BASE URL</label>
           <input
             className="field-input"
@@ -504,8 +524,9 @@ function SettingsPage(props: {
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="https://api.openai.com/v1"
           />
+          <div className="field-helper">兼容 OpenAI-compatible 接口，支持 DeepSeek、本地 Ollama 等</div>
         </div>
-        <div className="field">
+        <div className="settings-field-row">
           <label className="field-label">API KEY</label>
           <input
             className="field-input"
@@ -516,7 +537,7 @@ function SettingsPage(props: {
           />
           <div className="field-helper">仅保存在 chrome.storage.local，不会上传</div>
         </div>
-        <div className="field">
+        <div className="settings-field-row">
           <label className="field-label">MODEL</label>
           <input
             className="field-input"
@@ -525,28 +546,23 @@ function SettingsPage(props: {
             placeholder="gpt-4o-mini"
           />
         </div>
-
-        {testResult === 'success' && (
-          <div className="banner banner-success">{testMessage}</div>
-        )}
-        {testResult === 'error' && (
-          <div className="banner banner-error">{testMessage}</div>
-        )}
-
-        <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
-          <button className="btn btn-outline" onClick={() => void testConnection()} disabled={testing}>
-            {testing ? '测试中...' : '测试连接'}
-          </button>
-          <button className="btn btn-primary" onClick={() => void save()}>
-            下一步 →
-          </button>
-        </div>
       </div>
 
-      <div className="info-card">
-        <strong>兼容 OpenAI 格式的服务均可使用</strong>
-        <br />
-        支持 DeepSeek、Ollama、Azure OpenAI 等兼容 /v1/chat/completions 接口的服务。
+      {testResult === 'success' && (
+        <div className="banner banner-success">{testMessage}</div>
+      )}
+      {testResult === 'error' && (
+        <div className="banner banner-error">{testMessage}</div>
+      )}
+
+      <div className="settings-actions">
+        <button className="btn btn-outline" onClick={() => void testConnection()} disabled={testing}>
+          {testing ? '测试中...' : '测试连接'}
+        </button>
+        <div className="btn-row">
+          <button className="btn btn-outline" onClick={props.onCancel}>取消</button>
+          <button className="btn btn-primary" onClick={() => void save()}>保存</button>
+        </div>
       </div>
     </div>
   );
@@ -559,7 +575,6 @@ function ScanPage(props: {
   busy: string | null;
   onScan: () => void;
   onNext: () => void;
-  onBack: () => void;
 }) {
   const { scan } = props;
   const bookmarkCount = scan?.bookmarks.length ?? 0;
@@ -617,9 +632,6 @@ function ScanPage(props: {
       )}
 
       <div className="btn-row" style={{ marginTop: '16px' }}>
-        <button className="btn btn-outline" onClick={props.onBack}>
-          ← 上一步
-        </button>
         {scan && (
           <button className="btn btn-primary" style={{ flex: 1 }} onClick={props.onNext}>
             选择整理范围 →
@@ -698,7 +710,7 @@ export function SelectPage(props: {
   selectedIds: Set<string> | null;
   onSelect: (ids: Set<string> | null) => void;
   onBack: () => void;
-  onGenerate: (mode: OrganizeMode) => void;
+  onGenerate: (mode: OrganizeMode, folderNameStyle: FolderNameStyle) => void;
 }) {
   const { scan, selectedIds } = props;
   const bookmarks = scan.bookmarks;
@@ -710,6 +722,7 @@ export function SelectPage(props: {
   const folderMap = useMemo(() => buildFolderMap(tree), [tree]);
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
   const [organizeMode, setOrganizeMode] = useState<OrganizeMode>('conservative');
+  const [folderNameStyle, setFolderNameStyle] = useState<FolderNameStyle>('emoji');
 
   const collection = useMemo(() => createTreeCollection({
     rootNode: { id: 'root', name: 'Root', children: tree, bookmarkIds: [] },
@@ -974,6 +987,45 @@ export function SelectPage(props: {
         </div>
       </fieldset>
 
+      <fieldset className="folder-name-style-fieldset">
+        <legend className="folder-name-style-legend">
+          <FolderIcon />
+          文件夹命名风格
+        </legend>
+        <div className="folder-name-style-grid">
+          <label className={`folder-name-style-option ${folderNameStyle === 'emoji' ? 'selected' : ''}`}>
+            <input
+              type="radio"
+              name="folder-name-style"
+              value="emoji"
+              checked={folderNameStyle === 'emoji'}
+              onChange={() => setFolderNameStyle('emoji')}
+            />
+            <span className="folder-name-style-copy">
+              <strong>图标 + 文字</strong>
+              <span className="folder-name-style-example">💻 开发工具</span>
+              <small>用 emoji 前缀区分目录，一眼辨认</small>
+            </span>
+            <span className="organize-mode-indicator" aria-hidden="true" />
+          </label>
+          <label className={`folder-name-style-option ${folderNameStyle === 'text' ? 'selected' : ''}`}>
+            <input
+              type="radio"
+              name="folder-name-style"
+              value="text"
+              checked={folderNameStyle === 'text'}
+              onChange={() => setFolderNameStyle('text')}
+            />
+            <span className="folder-name-style-copy">
+              <strong>纯文字</strong>
+              <span className="folder-name-style-example">开发工具</span>
+              <small>保持简洁，不添加 emoji</small>
+            </span>
+            <span className="organize-mode-indicator" aria-hidden="true" />
+          </label>
+        </div>
+      </fieldset>
+
       <div className="select-footer">
         <button className="btn btn-outline" onClick={props.onBack}>
           ← 返回
@@ -983,7 +1035,7 @@ export function SelectPage(props: {
         </span>
         <button
           className="btn btn-primary"
-          onClick={() => props.onGenerate(organizeMode)}
+          onClick={() => props.onGenerate(organizeMode, folderNameStyle)}
           disabled={selectedCount === 0}
         >
           AI 开始分析 ({selectedCount} 条) →

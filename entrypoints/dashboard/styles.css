@@ -47,10 +47,14 @@ body {
   justify-content: space-between;
   padding: 12px 32px;
   background: #fff;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 2px solid #3b82f6;
   position: sticky;
   top: 0;
   z-index: 100;
+}
+
+.app-header.settings-open {
+  border-bottom: 1px solid var(--border);
 }
 
 .app-logo {
@@ -81,11 +85,35 @@ body {
   stroke-width: 2;
 }
 
-.header-title {
-  font-size: 14px;
-  color: var(--text-muted);
+.settings-header-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.header-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-width: 160px;
-  text-align: right;
+  width: max-content;
+  margin-left: auto;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.header-settings-btn:hover,
+.header-settings-btn.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
 }
 
 /* ===== 步骤指示器 ===== */
@@ -160,6 +188,41 @@ body {
 
 .page-container.wide {
   max-width: 1100px;
+}
+
+.settings-page-container {
+  max-width: 630px;
+  margin: 0 auto;
+  padding: 44px 24px 64px;
+}
+
+.settings-card {
+  overflow: hidden;
+  margin-bottom: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  box-shadow: var(--shadow);
+}
+
+.settings-field-row {
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-field-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-field-row .field-input {
+  background: #f8fafc;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 /* ===== 页面标题区 ===== */
@@ -799,6 +862,99 @@ body {
   border: 6px solid var(--primary);
 }
 
+/* 文件夹命名风格 */
+.folder-name-style-fieldset {
+  min-width: 0;
+  margin: 18px 0 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+}
+
+.folder-name-style-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.folder-name-style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.folder-name-style-option {
+  position: relative;
+  display: flex;
+  min-height: 118px;
+  padding: 18px 52px 18px 22px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.folder-name-style-option + .folder-name-style-option {
+  border-left: 1px solid var(--border);
+}
+
+.folder-name-style-option:hover {
+  background: #f8fafc;
+}
+
+.folder-name-style-option.selected {
+  background: var(--info-bg);
+}
+
+.folder-name-style-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.folder-name-style-option:focus-within {
+  outline: 3px solid rgba(79, 70, 229, 0.2);
+  outline-offset: -3px;
+}
+
+.folder-name-style-option .organize-mode-indicator {
+  top: 18px;
+  right: 20px;
+}
+
+.folder-name-style-option.selected .organize-mode-indicator {
+  border: 6px solid var(--primary);
+}
+
+.folder-name-style-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.folder-name-style-copy strong {
+  font-size: 15px;
+}
+
+.folder-name-style-option.selected strong {
+  color: var(--primary);
+}
+
+.folder-name-style-example {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.folder-name-style-copy small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .select-footer {
   display: flex;
   justify-content: space-between;
@@ -818,8 +974,19 @@ body {
 }
 
 @media (max-width: 760px) {
-  .organize-mode-grid {
+  .organize-mode-grid,
+  .folder-name-style-grid {
     grid-template-columns: 1fr;
+  }
+
+  .folder-name-style-option + .folder-name-style-option {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .settings-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

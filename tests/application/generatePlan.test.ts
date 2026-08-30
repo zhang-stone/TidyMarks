@@ -186,4 +186,36 @@ describe('generatePlan', () => {
     expect(maxActiveAssignments).toBe(3);
     expect(plan.assignments).toHaveLength(101);
   });
+
+  it('图标加文字风格会写入目录生成提示词和方案记录', async () => {
+    const prompts: ChatMessage[][] = [];
+    const responses = [
+      '{"candidates": [["💻 开发"]]}',
+      '{"categories": [["💻 开发"]]}',
+      JSON.stringify({
+        assignments: bookmarks.map((bookmark) => ({
+          bookmarkId: bookmark.id,
+          targetPath: ['💻 开发'],
+        })),
+      }),
+    ];
+    const model: ModelPort = {
+      async chat(messages) {
+        prompts.push(messages);
+        return responses[prompts.length - 1]!;
+      },
+    };
+
+    const plan = await generatePlan(
+      { model, storage: createMemoryStorage(), folderNameStyle: 'emoji' },
+      makeJob({ status: 'planning' }),
+      bookmarks,
+      [],
+    );
+
+    expect(prompts[0]?.[0]?.content).toContain('以一个语义匹配的 emoji 开头');
+    expect(prompts[1]?.[0]?.content).toContain('以一个语义匹配的 emoji 开头');
+    expect(plan.folderNameStyle).toBe('emoji');
+    expect(plan.taxonomy).toEqual([['💻 开发']]);
+  });
 });
