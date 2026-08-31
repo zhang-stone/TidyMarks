@@ -551,7 +551,7 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--card-bg);
-  min-height: 480px;
+  height: 520px;
   overflow: hidden;
 }
 
@@ -1356,7 +1356,7 @@ body {
   }
   .select-split {
     grid-template-columns: 1fr;
-    min-height: auto;
+    height: auto;
   }
   .select-split-left {
     border-right: none;
