@@ -17,6 +17,7 @@ export interface BookmarksPort {
   getChildren(parentId: string): Promise<BookmarkNode[]>;
   createFolder(parentId: string, title: string): Promise<{ id: string }>;
   move(id: string, destination: { parentId: string; index?: number }): Promise<void>;
+  remove(id: string): Promise<void>;
   removeTree(id: string): Promise<void>;
 }
 

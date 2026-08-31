@@ -19,7 +19,7 @@ export function fixtureTree(): BookmarkNode[] {
               parentId: '1',
               title: '开发',
               children: [
-                { id: '100', parentId: '10', title: 'GitHub', url: 'https://github.com' },
+                { id: '100', parentId: '10', title: 'GitHub', url: 'https://github.com', dateAdded: 123 },
                 { id: '101', parentId: '10', title: 'MDN', url: 'https://developer.mozilla.org' },
               ],
             },
@@ -71,6 +71,7 @@ describe('buildScanResult', () => {
       parentId: '10',
       rootId: '1',
       path: ['开发'],
+      dateAdded: 123,
     });
   });
 

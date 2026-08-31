@@ -3,6 +3,7 @@ import { scanBookmarks } from '@/src/application/scanBookmarks';
 import { applyPlan } from '@/src/application/applyPlan';
 import { undoLastApply } from '@/src/application/undoLastApply';
 import { resumeJob } from '@/src/application/resumeJob';
+import { deleteDuplicateBookmarks } from '@/src/application/deleteDuplicateBookmarks';
 import type { EventsPort, StoragePort } from '@/src/application/ports';
 import { createBookmarksRepository } from '@/src/infrastructure/chrome/bookmarksRepository';
 import {
@@ -189,6 +190,12 @@ export default defineBackground(() => {
             break;
           case 'CANCEL_JOB':
             payload = await handleCancel(storage, request.jobId);
+            break;
+          case 'DELETE_DUPLICATE_BOOKMARKS':
+            payload = await deleteDuplicateBookmarks(
+              { bookmarks: createBookmarksRepository(), storage },
+              request.bookmarkIds,
+            );
             break;
         }
         sendResponse({ ok: true, requestId, payload });

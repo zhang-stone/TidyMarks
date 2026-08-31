@@ -36,6 +36,10 @@ export function createBookmarksRepository(): BookmarksPort {
       await chrome.bookmarks.move(id, destination);
     },
 
+    async remove(id) {
+      await chrome.bookmarks.remove(id);
+    },
+
     async removeTree(id) {
       await chrome.bookmarks.removeTree(id);
     },

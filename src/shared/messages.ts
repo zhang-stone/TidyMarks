@@ -48,6 +48,12 @@ export const CancelJobRequestSchema = z.object({
   jobId: z.string(),
 });
 
+export const DeleteDuplicateBookmarksRequestSchema = z.object({
+  type: z.literal('DELETE_DUPLICATE_BOOKMARKS'),
+  requestId: z.string(),
+  bookmarkIds: z.array(z.string()).min(1),
+});
+
 export const RequestSchema = z.discriminatedUnion('type', [
   GetStatusRequestSchema,
   ScanBookmarksRequestSchema,
@@ -55,6 +61,7 @@ export const RequestSchema = z.discriminatedUnion('type', [
   RetryFailedRequestSchema,
   UndoLastApplyRequestSchema,
   CancelJobRequestSchema,
+  DeleteDuplicateBookmarksRequestSchema,
 ]);
 export type RequestMessage = z.infer<typeof RequestSchema>;
 

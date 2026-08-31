@@ -53,6 +53,7 @@ export const ScannedBookmarkSchema = z.object({
   id: z.string(),
   title: z.string(),
   url: z.string(),
+  dateAdded: z.number().optional(),
   parentId: z.string(),
   rootId: z.string(),
   /** 书签所在目录相对于根目录的目录名路径（不含根目录自身）。 */

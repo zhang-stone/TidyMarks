@@ -62,6 +62,7 @@ export function buildScanResult(
           id: child.id,
           title: child.title,
           url: child.url ?? '',
+          dateAdded: child.dateAdded,
           parentId: node.id,
           rootId: ctx.rootId,
           path: ctx.path,

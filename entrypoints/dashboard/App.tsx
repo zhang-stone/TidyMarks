@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { generatePlan, type GeneratePlanProgress } from '@/src/application/generatePlan';
 import type { ResumeView } from '@/src/application/resumeJob';
 import type { ModelPort } from '@/src/application/ports';
@@ -22,11 +22,13 @@ import {
   type ScannedBookmark,
 } from '@/src/shared/schemas';
 import { classifyError } from '@/src/shared/errors';
-import { TreeView, createTreeCollection } from '@chakra-ui/react';
+import { findDuplicateGroups, type DuplicateGroup, type DuplicateKind } from '@/src/domain/bookmarks/duplicates';
+
+const SelectFolderTree = lazy(() => import('./SelectFolderTree'));
 
 // ===== 类型定义 =====
 
-type View = 'settings' | 'scan' | 'select' | 'organizing' | 'preview' | 'result';
+type View = 'settings' | 'scan' | 'duplicates' | 'select' | 'organizing' | 'preview' | 'result';
 
 interface AppState {
   view: View;
@@ -45,6 +47,7 @@ type Action =
   | { type: 'view'; view: View }
   | { type: 'settingsSaved'; settings: ModelSettings; view: View }
   | { type: 'scanDone'; scan: ScanResult; job: JobState }
+  | { type: 'scanRefreshed'; scan: ScanResult }
   | { type: 'planProgress'; progress: GeneratePlanProgress }
   | { type: 'planDone'; plan: PlanRecord }
   | { type: 'assignments'; assignments: Assignment[] }
@@ -95,6 +98,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, settings: action.settings, view: action.view, error: null };
     case 'scanDone':
       return { ...state, scan: action.scan, job: action.job, view: 'scan' };
+    case 'scanRefreshed':
+      return { ...state, scan: action.scan, view: 'scan' };
     case 'planProgress':
       return { ...state, progress: action.progress };
     case 'planDone':
@@ -130,6 +135,7 @@ function getActiveStep(view: View, jobStatus?: string): number {
   switch (view) {
     case 'settings': return 0;
     case 'scan': return 1;
+    case 'duplicates': return 1;
     case 'select': return 2;
     case 'organizing': return 3;
     case 'preview': return 4;
@@ -211,6 +217,10 @@ export default function App() {
       ),
     [state.scan, selectedIds],
   );
+  const duplicateGroups = useMemo(
+    () => findDuplicateGroups(state.scan?.bookmarks ?? []),
+    [state.scan],
+  );
 
   const activeStep = getActiveStep(state.view, state.job?.status);
   const openSettings = () => {
@@ -223,12 +233,14 @@ export default function App() {
 
   return (
     <>
-      <AppHeader
-        activeStep={activeStep}
-        settingsOpen={state.view === 'settings'}
-        onOpenSettings={openSettings}
-        onCloseSettings={closeSettings}
-      />
+      {state.view !== 'duplicates' && (
+        <AppHeader
+          activeStep={activeStep}
+          settingsOpen={state.view === 'settings'}
+          onOpenSettings={openSettings}
+          onCloseSettings={closeSettings}
+        />
+      )}
       {state.error && <div className="page-container"><div className="banner banner-error">{state.error}</div></div>}
 
       {state.view === 'settings' && (
@@ -258,6 +270,31 @@ export default function App() {
             }
           }}
           onNext={() => dispatch({ type: 'view', view: 'select' })}
+          duplicateCount={duplicateGroups.length}
+          onDuplicates={() => dispatch({ type: 'view', view: 'duplicates' })}
+        />
+      )}
+
+      {state.view === 'duplicates' && state.scan && (
+        <DuplicateBookmarksPage
+          groups={duplicateGroups}
+          busy={state.busy}
+          onBack={() => dispatch({ type: 'view', view: 'scan' })}
+          onDelete={async (bookmarkIds) => {
+            const payload = (await runCommand(
+              {
+                type: 'DELETE_DUPLICATE_BOOKMARKS',
+                requestId: crypto.randomUUID(),
+                bookmarkIds,
+              },
+              '正在删除重复书签',
+            )) as { scan: ScanResult; deletedIds: string[]; failures: Array<{ message: string }> } | null;
+            if (!payload) return;
+            dispatch({ type: 'scanRefreshed', scan: payload.scan });
+            if (payload.failures.length) {
+              dispatch({ type: 'error', error: `${payload.deletedIds.length} 条已删除，${payload.failures.length} 条删除失败` });
+            }
+          }}
         />
       )}
 
@@ -398,6 +435,7 @@ function AppHeader(props: {
 }) {
   return (
     <header className={`app-header ${props.settingsOpen ? 'settings-open' : ''}`}>
+      <div className="app-header-inner">
       <div className="app-logo">
         <div className="app-logo-icon">
           <svg viewBox="0 0 24 24">
@@ -438,8 +476,13 @@ function AppHeader(props: {
         className={`header-settings-btn ${props.settingsOpen ? 'active' : ''}`}
         onClick={props.settingsOpen ? props.onCloseSettings : props.onOpenSettings}
       >
-        ⚙ {props.settingsOpen ? '关闭设置' : '设置'}
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <circle cx="7" cy="7" r="2.2" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13M2.93 2.93l1.06 1.06M10.01 10.01l1.06 1.06M2.93 11.07l1.06-1.06M10.01 3.99l1.06-1.06" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+        {props.settingsOpen ? '关闭设置' : '设置'}
       </button>
+      </div>
     </header>
   );
 }
@@ -575,6 +618,8 @@ function ScanPage(props: {
   busy: string | null;
   onScan: () => void;
   onNext: () => void;
+  duplicateCount: number;
+  onDuplicates: () => void;
 }) {
   const { scan } = props;
   const bookmarkCount = scan?.bookmarks.length ?? 0;
@@ -608,43 +653,164 @@ function ScanPage(props: {
             <div className="progress-bar">
               <div className="progress-fill" style={{ width: '100%' }} />
             </div>
+            <div className="stat-grid scan-stat-grid">
+              <div className="stat-card">
+                <div className="stat-card-value">{bookmarkCount}</div>
+                <div className="stat-card-label">书签总数</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card-value">{folderCount}</div>
+                <div className="stat-card-label">文件夹</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card-value">{bookmarkCount}</div>
+                <div className="stat-card-label">可整理书签</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-card-value">{noTitleCount}</div>
+                <div className="stat-card-label">无标题</div>
+              </div>
+            </div>
           </div>
 
-          <div className="stat-grid">
-            <div className="stat-card">
-              <div className="stat-card-value primary">{bookmarkCount}</div>
-              <div className="stat-card-label">书签总数</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-card-value">{folderCount}</div>
-              <div className="stat-card-label">文件夹</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-card-value primary">{bookmarkCount}</div>
-              <div className="stat-card-label">可整理书签</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-card-value muted">{noTitleCount}</div>
-              <div className="stat-card-label">无标题</div>
-            </div>
+          <div className="scan-feature-label">选择功能</div>
+          <div className="scan-feature-grid">
+            <button className="scan-feature-card" onClick={props.onNext}>
+              <span className="scan-feature-icon scan-feature-icon-primary">▦</span>
+              <strong>整理书签</strong>
+              <span>AI 自动分类，重建目录结构</span>
+              <b>选择范围 →</b>
+            </button>
+            <button className="scan-feature-card" onClick={props.onDuplicates} disabled={!props.duplicateCount}>
+              <span className="scan-feature-icon">▣</span>
+              <strong>检查重复书签</strong>
+              <span>找出相同或相似的重复项</span>
+              <b>{props.duplicateCount ? `查看 ${props.duplicateCount} 组结果 →` : '未发现重复项'}</b>
+            </button>
           </div>
         </>
       )}
-
-      <div className="btn-row" style={{ marginTop: '16px' }}>
-        {scan && (
-          <button className="btn btn-primary" style={{ flex: 1 }} onClick={props.onNext}>
-            选择整理范围 →
-          </button>
-        )}
-      </div>
     </div>
+  );
+}
+
+const DUPLICATE_LABELS: Record<DuplicateKind, string> = {
+  'same-url': '相同网址',
+  'similar-url': '相似网址',
+  'same-title': '相同标题',
+};
+
+function formatBookmarkDate(value?: number): string {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(value)
+    .replaceAll('/', '-');
+}
+
+function DuplicateBookmarksPage(props: {
+  groups: DuplicateGroup[];
+  busy: string | null;
+  onBack: () => void;
+  onDelete: (bookmarkIds: string[]) => void;
+}) {
+  const [keptByGroup, setKeptByGroup] = useState<Record<string, string>>(
+    () => Object.fromEntries(props.groups.map((group) => [group.id, group.bookmarks[0]!.id])),
+  );
+  const [ignored, setIgnored] = useState<Set<string>>(() => new Set());
+
+  const deleteIds = props.groups.flatMap((group) =>
+    ignored.has(group.id)
+      ? []
+      : group.bookmarks.filter((bookmark) => bookmark.id !== keptByGroup[group.id]).map((bookmark) => bookmark.id),
+  );
+
+  const toggleIgnored = (groupId: string) => {
+    setIgnored((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
+
+  return (
+    <main className="duplicate-page">
+      <div className="duplicate-topbar">
+        <button className="duplicate-back" onClick={props.onBack}>‹&nbsp; 返回</button>
+        <span>共发现 {props.groups.reduce((total, group) => total + group.bookmarks.length - 1, 0)} 个重复</span>
+      </div>
+      <div className="page-header duplicate-heading">
+        <div className="page-header-left">
+          <h1>重复书签</h1>
+          <p>以下书签存在重复或高度相似，选择保留哪一个后可一键删除其余。</p>
+        </div>
+      </div>
+
+      {props.groups.length === 0 && <div className="duplicate-empty">没有发现重复书签</div>}
+
+      <div className="duplicate-groups">
+        {props.groups.map((group) => {
+          const isIgnored = ignored.has(group.id);
+          return (
+            <section className={`duplicate-group ${isIgnored ? 'ignored' : ''}`} key={group.id}>
+              <header>
+                <div>
+                  <span className={`duplicate-badge ${group.kind}`}>{DUPLICATE_LABELS[group.kind]}</span>
+                  <span>{group.bookmarks.length} 条</span>
+                </div>
+                <button onClick={() => toggleIgnored(group.id)}>{isIgnored ? '恢复' : '忽略'}</button>
+              </header>
+              {group.bookmarks.map((bookmark) => {
+                const checked = keptByGroup[group.id] === bookmark.id;
+                return (
+                  <label className={`duplicate-item ${checked ? 'kept' : ''}`} key={bookmark.id}>
+                    <img
+                      src={`chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(bookmark.url)}&size=32`}
+                      alt=""
+                    />
+                    <span className="duplicate-copy">
+                      <strong>{bookmark.title || '无标题'}</strong>
+                      <span>{bookmark.url}</span>
+                      <small>
+                        <em>{bookmark.path.join(' / ') || '未整理'}</em>
+                        {formatBookmarkDate(bookmark.dateAdded)}
+                      </small>
+                    </span>
+                    <input
+                      type="radio"
+                      name={group.id}
+                      checked={checked}
+                      disabled={isIgnored}
+                      onChange={() => setKeptByGroup((current) => ({ ...current, [group.id]: bookmark.id }))}
+                      aria-label={`保留 ${bookmark.title || bookmark.url}`}
+                    />
+                  </label>
+                );
+              })}
+            </section>
+          );
+        })}
+      </div>
+
+      {props.groups.length > 0 && (
+        <footer className="duplicate-footer">
+          <span>将删除 <strong>{deleteIds.length}</strong> 个重复书签</span>
+          <button
+            className="btn duplicate-delete-btn"
+            disabled={!deleteIds.length || props.busy !== null}
+            onClick={() => props.onDelete(deleteIds)}
+          >
+            {props.busy ? '正在删除...' : '删除重复项'}
+          </button>
+        </footer>
+      )}
+    </main>
   );
 }
 
 // ===== 选择范围页 =====
 
-interface FolderTreeNode {
+export interface FolderTreeNode {
   id: string;
   name: string;
   children: FolderTreeNode[];
@@ -724,27 +890,6 @@ export function SelectPage(props: {
   const [organizeMode, setOrganizeMode] = useState<OrganizeMode>('conservative');
   const [folderNameStyle, setFolderNameStyle] = useState<FolderNameStyle>('emoji');
 
-  const collection = useMemo(() => createTreeCollection({
-    rootNode: { id: 'root', name: 'Root', children: tree, bookmarkIds: [] },
-    nodeToValue: (node) => node.id,
-    nodeToString: (node) => node.name,
-  }), [tree]);
-
-  // 默认展开所有分支节点
-  const allBranchIds = useMemo(() => {
-    const ids: string[] = [];
-    const walk = (nodes: FolderTreeNode[]) => {
-      for (const n of nodes) {
-        if (n.children.length > 0) {
-          ids.push(n.id);
-          walk(n.children);
-        }
-      }
-    };
-    walk(tree);
-    return ids;
-  }, [tree]);
-
   const bookmarksById = useMemo(() => {
     const map = new Map<string, ScannedBookmark>();
     for (const b of bookmarks) map.set(b.id, b);
@@ -793,23 +938,6 @@ export function SelectPage(props: {
     props.onSelect(ids);
   };
 
-  // 计算叶子节点的选中状态
-  const getLeafCheckState = (node: FolderTreeNode): 'all' | 'some' | 'none' => {
-    const bmIds = collectAllBookmarkIds(node);
-    if (bmIds.length === 0) return 'none';
-    if (!selectedIds) return 'all';
-    const count = bmIds.filter(id => selectedIds.has(id)).length;
-    if (count === bmIds.length) return 'all';
-    if (count > 0) return 'some';
-    return 'none';
-  };
-
-  const getLeafCount = (node: FolderTreeNode): { selected: number; total: number } => {
-    const bmIds = collectAllBookmarkIds(node);
-    const selected = selectedIds ? bmIds.filter(id => selectedIds.has(id)).length : bmIds.length;
-    return { selected, total: bmIds.length };
-  };
-
   return (
     <div className="page-container wide">
       <div className="page-header">
@@ -824,82 +952,16 @@ export function SelectPage(props: {
         <div className="select-split-left">
           <div className="select-split-header">书签文件夹</div>
           <div className="select-folder-tree">
-            <TreeView.Root
-              collection={collection}
-              defaultExpandedValue={allBranchIds}
-              size="sm"
-            >
-              <TreeView.Tree>
-                <TreeView.Node
-                  render={({ node, nodeState }) => {
-                    const folderNode = folderMap.get(node.id);
-                    if (!folderNode) return null;
-                    const isActive = activeFolderId === node.id;
-                    const count = getLeafCount(folderNode);
-                    const checkState = getLeafCheckState(folderNode);
-
-                    if (nodeState.isBranch) {
-                      return (
-                        <TreeView.BranchControl
-                          className={`folder-tree-row ${isActive ? 'active' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveFolderId(node.id);
-                          }}
-                        >
-                          <TreeView.BranchIndicator className="folder-tree-arrow">
-                            <span>▾</span>
-                          </TreeView.BranchIndicator>
-                          <FolderIcon />
-                          <TreeView.BranchText className="folder-tree-name">
-                            {node.name}
-                          </TreeView.BranchText>
-                          {count.total > 0 && (
-                            <>
-                              <span className="folder-tree-count">{count.selected}/{count.total}</span>
-                              <input
-                                type="checkbox"
-                                className="folder-tree-checkbox"
-                                checked={checkState !== 'none'}
-                                ref={(el) => { if (el) el.indeterminate = checkState === 'some'; }}
-                                onChange={(e) => { e.stopPropagation(); toggleFolder(folderNode); }}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                            </>
-                          )}
-                        </TreeView.BranchControl>
-                      );
-                    }
-
-                    return (
-                      <TreeView.Item
-                        className={`folder-tree-row folder-tree-leaf ${isActive ? 'active' : ''}`}
-                        onClick={() => setActiveFolderId(node.id)}
-                      >
-                        <span className="folder-tree-arrow-spacer" />
-                        <FolderIcon />
-                        <TreeView.ItemText className="folder-tree-name">
-                          {node.name}
-                        </TreeView.ItemText>
-                        {count.total > 0 && (
-                          <>
-                            <span className="folder-tree-count">{count.selected}/{count.total}</span>
-                            <input
-                              type="checkbox"
-                              className="folder-tree-checkbox"
-                              checked={checkState !== 'none'}
-                              ref={(el) => { if (el) el.indeterminate = checkState === 'some'; }}
-                              onChange={(e) => { e.stopPropagation(); toggleFolder(folderNode); }}
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          </>
-                        )}
-                      </TreeView.Item>
-                    );
-                  }}
-                />
-              </TreeView.Tree>
-            </TreeView.Root>
+            <Suspense fallback={<div className="select-empty">正在加载文件夹树...</div>}>
+              <SelectFolderTree
+                tree={tree}
+                folderMap={folderMap}
+                activeFolderId={activeFolderId}
+                selectedIds={selectedIds}
+                onActiveFolderChange={setActiveFolderId}
+                onToggleFolder={toggleFolder}
+              />
+            </Suspense>
           </div>
         </div>
 
@@ -988,10 +1050,11 @@ export function SelectPage(props: {
       </fieldset>
 
       <fieldset className="folder-name-style-fieldset">
-        <legend className="folder-name-style-legend">
+        <legend className="sr-only">文件夹命名风格</legend>
+        <div className="folder-name-style-title">
           <FolderIcon />
           文件夹命名风格
-        </legend>
+        </div>
         <div className="folder-name-style-grid">
           <label className={`folder-name-style-option ${folderNameStyle === 'emoji' ? 'selected' : ''}`}>
             <input

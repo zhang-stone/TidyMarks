@@ -86,6 +86,15 @@ export function createMemoryBookmarks(initial: BookmarkNode[]): BookmarksPort & 
       }
       reindex();
     },
+    async remove(id) {
+      const node = store.get(id);
+      if (!node || node.url === undefined) throw new Error(`bookmark ${id} not found`);
+      const siblings = index.get(node.parentId ?? '') ?? [];
+      const position = siblings.indexOf(id);
+      if (position >= 0) siblings.splice(position, 1);
+      store.delete(id);
+      reindex();
+    },
     async removeTree(id) {
       const collect = (nid: string): string[] => {
         const kids = index.get(nid) ?? [];

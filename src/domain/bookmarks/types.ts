@@ -9,6 +9,7 @@ export interface BookmarkNode {
   title: string;
   /** 存在 url 表示书签节点，否则是目录节点。 */
   url?: string;
+  dateAdded?: number;
   unmodifiable?: boolean | string;
   folderType?: string;
   children?: BookmarkNode[];

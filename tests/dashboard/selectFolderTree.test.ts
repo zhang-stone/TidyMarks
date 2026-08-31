@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ChakraProvider, defaultSystem } from '@chakra-ui/react';
 import type { ScanResult } from '@/src/shared/schemas';
+import type { FolderTreeNode } from '@/entrypoints/dashboard/App';
 
 const scan: ScanResult = {
   scanId: 'indent-regression',
@@ -44,7 +44,24 @@ describe('选择范围文件夹树', () => {
       storage: { local: {} },
     };
 
-    const { SelectPage } = await import('@/entrypoints/dashboard/App');
+    const [{ SelectPage }, { default: SelectFolderTree }] = await Promise.all([
+      import('@/entrypoints/dashboard/App'),
+      import('@/entrypoints/dashboard/SelectFolderTree'),
+    ]);
+    const shortcuts: FolderTreeNode = {
+      id: 'shortcuts', name: '快捷键', children: [], bookmarkIds: ['bookmark'],
+    };
+    const bytedance: FolderTreeNode = {
+      id: 'bytedance', name: 'bytedance', children: [shortcuts], bookmarkIds: [],
+    };
+    const folderTreeHtml = renderToStaticMarkup(createElement(SelectFolderTree, {
+      tree: [bytedance],
+      folderMap: new Map([['bytedance', bytedance], ['shortcuts', shortcuts]]),
+      activeFolderId: null,
+      selectedIds: null,
+      onActiveFolderChange: () => undefined,
+      onToggleFolder: () => undefined,
+    }));
     const page = createElement(SelectPage, {
       scan,
       selectedIds: null,
@@ -52,13 +69,11 @@ describe('选择范围文件夹树', () => {
       onBack: () => undefined,
       onGenerate: () => undefined,
     });
-    const html = renderToStaticMarkup(
-      createElement(ChakraProvider, { value: defaultSystem, children: page }),
-    );
+    const html = renderToStaticMarkup(page);
 
-    const shortcutIndex = html.indexOf('快捷键');
-    const leafItemIndex = html.lastIndexOf('data-part="item"', shortcutIndex);
-    const parentBranchIndex = html.lastIndexOf('data-part="branch-control"', shortcutIndex);
+    const shortcutIndex = folderTreeHtml.indexOf('快捷键');
+    const leafItemIndex = folderTreeHtml.lastIndexOf('data-part="item"', shortcutIndex);
+    const parentBranchIndex = folderTreeHtml.lastIndexOf('data-part="branch-control"', shortcutIndex);
     expect(shortcutIndex).toBeGreaterThan(-1);
     expect(leafItemIndex).toBeGreaterThan(parentBranchIndex);
     expect(html).toContain('保守整理');
