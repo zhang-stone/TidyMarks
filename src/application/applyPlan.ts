@@ -1,9 +1,10 @@
 import type { BookmarksPort, EventsPort, StoragePort } from './ports';
 import { assertTransition, isWriteLocked } from '../domain/organize/stateMachine';
-import type { BookmarkNode } from '../domain/bookmarks/types';
+import { isUnmodifiable, type BookmarkNode } from '../domain/bookmarks/types';
 import { classifyError } from '../shared/errors';
 import type {
   Assignment,
+  DeletedFolder,
   FailureItem,
   JobState,
   ScannedBookmark,
@@ -197,6 +198,7 @@ export async function applyPlan(
     createdAt: now(),
     moves: moves.filter((m) => m.toFolderId.length > 0),
     createdFolders,
+    deletedFolders: [],
   };
   await storage.saveUndo(snapshot);
 
@@ -267,6 +269,50 @@ export async function applyPlan(
 
   const completed: JobState = { ...working, failures, status: 'completed', updatedAt: now() };
   await storage.saveJob(completed);
+
+  // ---- 5. 清理被搬空的原文件夹（仅删空目录，绝不删除任何书签；撤销时会据此重建） ----
+  const deletedFolders = await cleanupEmptySourceFolders(deps.bookmarks, moves, createdIds);
+  if (deletedFolders.length > 0) {
+    await storage.saveUndo({ ...snapshot, deletedFolders });
+  }
+
   events?.completed(completed);
   return { job: completed, appliedIds: completed.appliedIds, failures };
+}
+
+/**
+ * 逐条移动完成后清理被搬空的原文件夹（架构方案第 8 节的补充）。
+ * - 仅删除子节点为空的目录，绝不删除书签；非空目录（含未整理书签或子目录）保留；
+ * - 跳过本轮新建目录与系统根目录（parentId 缺失/为 '0'、或不可修改的节点）；
+ * - 删空一个目录后其父目录可能随之变空，向上冒泡继续检查；
+ * - 返回被删目录清单（含原 parentId/title/index）供撤销时重建。
+ */
+async function cleanupEmptySourceFolders(
+  bookmarks: BookmarksPort,
+  moves: UndoMove[],
+  createdIds: Set<string>,
+): Promise<DeletedFolder[]> {
+  const deleted: DeletedFolder[] = [];
+  const visited = new Set<string>();
+  const queue: string[] = moves.map((m) => m.fromParentId);
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    if (createdIds.has(id)) continue; // 本轮新建目录不动
+    const node = await bookmarks.get(id);
+    if (!node || node.url !== undefined) continue; // 已不存在或不是目录
+    if (!node.parentId || node.parentId === '0' || isUnmodifiable(node)) continue; // 系统根目录保护
+    const children = await bookmarks.getChildren(id);
+    if (children.length > 0) continue; // 非空 → 保留，零书签丢失
+    try {
+      await bookmarks.removeTree(id); // 已确认为空目录，removeTree 与 remove 等效且兼容
+    } catch {
+      continue; // 删除失败则不记录，避免撤销误重建
+    }
+    deleted.push({ id, parentId: node.parentId, title: node.title, index: node.index ?? 0 });
+    queue.push(node.parentId); // 父目录可能因此变空
+  }
+  return deleted;
 }

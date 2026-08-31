@@ -32,7 +32,7 @@ export interface StoragePort {
   savePlan(plan: PlanRecord): Promise<void>;
   loadUndo(): Promise<UndoSnapshot | null>;
   saveUndo(snapshot: UndoSnapshot): Promise<void>;
-  clear(keys: Array<'plan' | 'scan'>): Promise<void>;
+  clear(keys: Array<'plan' | 'scan' | 'job' | 'undo'>): Promise<void>;
 }
 
 /** 任务进度广播；Dashboard 关闭时发送失败也必须可忽略（fire-and-forget）。 */

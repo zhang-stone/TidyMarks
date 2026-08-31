@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyPlan } from '@/src/application/applyPlan';
+import { undoLastApply } from '@/src/application/undoLastApply';
 import type { BookmarkNode } from '@/src/domain/bookmarks/types';
 import type { Assignment, ScannedBookmark } from '@/src/shared/schemas';
 import {
@@ -149,5 +150,123 @@ describe('applyPlan', () => {
         message: '保守模式的目标文件夹已不存在，已跳过',
       },
     ]);
+  });
+
+  // 被搬空的原文件夹（含向上冒泡的空父目录）应删除并记入撤销快照，非空目录保留。
+  const nestedTree: BookmarkNode[] = [
+    {
+      id: '0',
+      title: '',
+      children: [
+        {
+          id: '1',
+          parentId: '0',
+          title: '书签栏',
+          children: [
+            {
+              id: '20',
+              parentId: '1',
+              index: 0,
+              title: '外层',
+              children: [
+                {
+                  id: '21',
+                  parentId: '20',
+                  index: 0,
+                  title: '内层',
+                  children: [
+                    { id: '100', parentId: '21', index: 0, title: 'GitHub', url: 'https://github.com' },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  const nestedBookmark: ScannedBookmark[] = [
+    { id: '100', title: 'GitHub', url: 'https://github.com', parentId: '21', rootId: '1', path: [] },
+  ];
+  const nestedAssignment: Assignment[] = [{ bookmarkId: '100', targetPath: ['开发'] }];
+
+  it('清理被搬空的原文件夹并向上冒泡，非空目录保留', async () => {
+    const bm = createMemoryBookmarks(nestedTree);
+    const storage = createMemoryStorage();
+    await applyPlan({ bookmarks: bm, storage }, makeJob(), nestedBookmark, nestedAssignment);
+
+    // 内层、外层均被搬空 → 都删除；书签移入新建的“开发”。
+    expect(bm.nodes().some((n) => n.id === '21')).toBe(false);
+    expect(bm.nodes().some((n) => n.id === '20')).toBe(false);
+    const dev = bm.nodes().find((n) => n.title === '开发');
+    expect(bm.nodes().find((n) => n.id === '100')?.parentId).toBe(dev?.id);
+
+    const deleted = storage.dump().undo?.deletedFolders ?? [];
+    expect(deleted.map((d) => d.id).sort()).toEqual(['20', '21']);
+    expect(deleted.find((d) => d.id === '21')).toMatchObject({ parentId: '20', title: '内层' });
+  });
+
+  it('保留仍含其它书签的原文件夹', async () => {
+    const withSibling: BookmarkNode[] = [
+      {
+        id: '0',
+        title: '',
+        children: [
+          {
+            id: '1',
+            parentId: '0',
+            title: '书签栏',
+            children: [
+              {
+                id: '20',
+                parentId: '1',
+                index: 0,
+                title: '外层',
+                children: [
+                  { id: '100', parentId: '20', index: 0, title: 'GitHub', url: 'https://github.com' },
+                  { id: '199', parentId: '20', index: 1, title: '未整理', url: 'https://keep.me' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const bm = createMemoryBookmarks(withSibling);
+    const storage = createMemoryStorage();
+    await applyPlan(
+      { bookmarks: bm, storage },
+      makeJob(),
+      [{ id: '100', title: 'GitHub', url: 'https://github.com', parentId: '20', rootId: '1', path: [] }],
+      nestedAssignment,
+    );
+
+    // “外层”仍含未整理书签 199 → 不删除。
+    expect(bm.nodes().some((n) => n.id === '20')).toBe(true);
+    expect(storage.dump().undo?.deletedFolders ?? []).toEqual([]);
+  });
+
+  it('撤销时重建被删原文件夹并把书签移回', async () => {
+    const bm = createMemoryBookmarks(nestedTree);
+    const storage = createMemoryStorage();
+    const applied = await applyPlan(
+      { bookmarks: bm, storage },
+      makeJob(),
+      nestedBookmark,
+      nestedAssignment,
+    );
+    expect(bm.nodes().some((n) => n.id === '20')).toBe(false);
+
+    const undone = await undoLastApply({ bookmarks: bm, storage }, applied.job);
+    expect(undone.job.status).toBe('undone');
+    expect(undone.conflicts).toEqual([]);
+
+    // 外层/内层按层级重建（新 id），书签移回内层，新建的“开发”被清空删除。
+    const outer = bm.nodes().find((n) => n.title === '外层');
+    const inner = bm.nodes().find((n) => n.title === '内层');
+    expect(outer?.parentId).toBe('1');
+    expect(inner?.parentId).toBe(outer?.id);
+    expect(bm.nodes().find((n) => n.id === '100')?.parentId).toBe(inner?.id);
+    expect(bm.nodes().some((n) => n.title === '开发')).toBe(false);
   });
 });

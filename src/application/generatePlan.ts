@@ -5,7 +5,7 @@ import {
   normalizeTargetPath,
   validateAssignmentBatch,
 } from '../domain/organize/plan';
-import { assertTransition } from '../domain/organize/stateMachine';
+import { assertTransition, canTransition } from '../domain/organize/stateMachine';
 import { extractJsonObject } from '../infrastructure/model/openAICompatibleClient';
 import {
   assignmentBatchPrompt,
@@ -111,6 +111,15 @@ export async function generatePlan(
   const folderNameStyle = deps.folderNameStyle ?? 'text';
   const now = deps.now ?? (() => Date.now());
   const total = bookmarks.length;
+
+  // 随管线推进任务状态：planning →(进入分配)→ classifying →(方案就绪)→ reviewing，
+  // 使后续 applyPlan 能合法迁移到 applying。canTransition 守护恢复/失败等非常规起点。
+  let jobStatus = job.status;
+  const advanceJobTo = async (target: JobState['status']): Promise<void> => {
+    if (!canTransition(jobStatus, target)) return;
+    jobStatus = target;
+    await storage.saveJob({ ...job, status: target, updatedAt: now() });
+  };
   const conservativePaths = existingPathsByRoot(deps.existingFolderPaths ?? []);
 
   if (mode === 'conservative') {
@@ -209,6 +218,7 @@ export async function generatePlan(
 
   // ---- 阶段二：书签分配 ----
   if (plan.phase === 'assign') {
+    await advanceJobTo('classifying');
     const batches = chunk(bookmarks, ASSIGN_BATCH_SIZE);
     const startBatch = Math.floor(plan.assignCursor / ASSIGN_BATCH_SIZE);
     const pendingBatchIndexes = batches
@@ -275,6 +285,7 @@ export async function generatePlan(
     }
     plan.phase = 'done';
     await storage.savePlan(plan);
+    await advanceJobTo('reviewing');
     onProgress?.({ phase: 'done', processed: total, total });
   }
 

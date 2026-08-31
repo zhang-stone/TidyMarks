@@ -165,6 +165,15 @@ export const UndoMoveSchema = z.object({
 });
 export type UndoMove = z.infer<typeof UndoMoveSchema>;
 
+/** 应用时被搬空并删除的原文件夹，撤销时据此重建以还原书签位置。 */
+export const DeletedFolderSchema = z.object({
+  id: z.string(),
+  parentId: z.string(),
+  title: z.string(),
+  index: z.number().int().nonnegative(),
+});
+export type DeletedFolder = z.infer<typeof DeletedFolderSchema>;
+
 export const UndoSnapshotSchema = z.object({
   jobId: z.string(),
   createdAt: z.number(),
@@ -172,6 +181,8 @@ export const UndoSnapshotSchema = z.object({
   createdFolders: z.array(
     z.object({ id: z.string(), depth: z.number().int().nonnegative() }),
   ),
+  // 旧快照无此字段：默认空数组，保证向后兼容。
+  deletedFolders: z.array(DeletedFolderSchema).default([]),
 });
 export type UndoSnapshot = z.infer<typeof UndoSnapshotSchema>;
 

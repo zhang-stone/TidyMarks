@@ -57,6 +57,7 @@ describe('orderFoldersForDeletion', () => {
         { id: 'deep', depth: 3 },
         { id: 'mid', depth: 2 },
       ],
+      deletedFolders: [],
     };
     expect(orderFoldersForDeletion(snapshot.createdFolders)).toEqual(['deep', 'mid', 'shallow']);
   });

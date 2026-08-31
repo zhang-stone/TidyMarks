@@ -51,7 +51,7 @@ type Action =
   | { type: 'planProgress'; progress: GeneratePlanProgress }
   | { type: 'planDone'; plan: PlanRecord }
   | { type: 'assignments'; assignments: Assignment[] }
-  | { type: 'jobUpdate'; job: JobState }
+  | { type: 'jobUpdate'; job: JobState | null }
   | { type: 'busy'; busy: string | null }
   | { type: 'error'; error: string | null };
 
@@ -182,6 +182,8 @@ export default function App() {
       if (!parsed.success) return;
       const data = parsed.data;
       if (data.type === 'JOB_PROGRESS') return;
+      // 忽略非当前任务的广播，避免上一轮撤销/应用的延迟事件顶掉新一轮界面
+      if (data.job.jobId !== jobIdRef.current) return;
       dispatch({ type: 'jobUpdate', job: data.job });
       if (data.type === 'JOB_COMPLETED' || data.type === 'JOB_FAILED') {
         dispatch({ type: 'busy', busy: null });
@@ -416,7 +418,9 @@ export default function App() {
           onNewRound={() => {
             jobIdRef.current = crypto.randomUUID();
             setSelectedIds(null);
-            void storage.clear(['plan', 'scan']);
+            // 清除持久化 job 与撤销快照，并重置内存 job，避免旧状态残留顶回结果页
+            void storage.clear(['plan', 'scan', 'job', 'undo']);
+            dispatch({ type: 'jobUpdate', job: null });
             dispatch({ type: 'view', view: 'scan' });
           }}
         />
@@ -1405,7 +1409,6 @@ function ResultPage(props: {
   const percent = totalAssignments > 0 ? Math.round((applied / totalAssignments) * 100) : 0;
 
   const isApplying = job.status === 'applying' || job.status === 'undoing';
-  const isDone = job.status === 'completed' || job.status === 'undone' || job.status === 'partially_undone';
 
   return (
     <div className="page-container">
@@ -1515,7 +1518,7 @@ function ResultPage(props: {
             从断点继续
           </button>
         )}
-        {isDone && applied > 0 && (
+        {(job.status === 'completed' || job.status === 'partially_undone') && applied > 0 && (
           <button className="btn btn-outline" onClick={props.onUndo} disabled={props.busy !== null}>
             撤销本次整理
           </button>

@@ -49,6 +49,8 @@ describe('generatePlan', () => {
     expect(plan.taxonomy).toEqual([['开发'], ['购物']]);
     expect(plan.assignments.map((a) => a.bookmarkId)).toEqual(['b0', 'b1']);
     expect(plan.assignments[0]).toMatchObject({ targetPath: ['开发'] });
+    // 方案就绪后任务须迁移到 reviewing，使 applyPlan 能合法进入 applying。
+    expect(storage.dump().job?.status).toBe('reviewing');
   });
 
   it('恢复时从游标继续，不重跑已完成批次', async () => {

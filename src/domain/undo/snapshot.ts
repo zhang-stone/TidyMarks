@@ -1,4 +1,4 @@
-import type { UndoMove, UndoSnapshot } from '../../shared/schemas';
+import type { DeletedFolder, UndoMove, UndoSnapshot } from '../../shared/schemas';
 
 /** 撤销时单条移动的可执行性判定。 */
 export type RestoreDecision =
@@ -56,4 +56,29 @@ export function orderFoldersForDeletion(
   createdFolders: UndoSnapshot['createdFolders'],
 ): string[] {
   return [...createdFolders].sort((a, b) => b.depth - a.depth).map((f) => f.id);
+}
+
+/**
+ * 被删原文件夹的重建顺序：父目录先于子目录。
+ * 按 parentId 拓扑排序——parentId 不在待建集合中（即外部已有目录或已重建）的先建，
+ * 逐轮推进；出现环（理论上不会）时残余按原序追加，避免死循环。
+ */
+export function orderFoldersForRecreation(folders: DeletedFolder[]): DeletedFolder[] {
+  const remaining = [...folders];
+  const ordered: DeletedFolder[] = [];
+  let progressed = true;
+  while (remaining.length > 0 && progressed) {
+    progressed = false;
+    for (let i = remaining.length - 1; i >= 0; i--) {
+      const folder = remaining[i]!;
+      const parentStillPending = remaining.some((r) => r.id === folder.parentId);
+      if (!parentStillPending) {
+        ordered.push(folder);
+        remaining.splice(i, 1);
+        progressed = true;
+      }
+    }
+  }
+  ordered.push(...remaining);
+  return ordered;
 }

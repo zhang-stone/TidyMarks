@@ -3,11 +3,12 @@ import { assertTransition, isWriteLocked } from '../domain/organize/stateMachine
 import {
   decideRestore,
   orderFoldersForDeletion,
+  orderFoldersForRecreation,
   orderRestores,
   type RestoreDecision,
 } from '../domain/undo/snapshot';
 import { classifyError } from '../shared/errors';
-import type { FailureItem, JobState, UndoSnapshot } from '../shared/schemas';
+import type { FailureItem, JobState, UndoMove, UndoSnapshot } from '../shared/schemas';
 
 export interface UndoDeps {
   bookmarks: BookmarksPort;
@@ -58,9 +59,27 @@ export async function undoLastApply(deps: UndoDeps, job: JobState): Promise<Undo
   const conflicts: FailureItem[] = [];
   let cancelled = false;
 
+  // ---- 0. 重建应用时被搬空删除的原文件夹，并把 fromParentId 重映射到新 id ----
+  // 父目录先于子目录重建；创建失败的目录，其书签会在下面报 parent_missing 冲突。
+  const folderIdMap = new Map<string, string>();
+  for (const folder of orderFoldersForRecreation(snapshot.deletedFolders)) {
+    const parentId = folderIdMap.get(folder.parentId) ?? folder.parentId;
+    try {
+      const created = await bookmarks.createFolder(parentId, folder.title);
+      folderIdMap.set(folder.id, created.id);
+    } catch {
+      // 原父目录已不存在或创建失败：忽略，交由后续冲突判定处理。
+    }
+  }
+  const moves: UndoMove[] = snapshot.moves.map((move) =>
+    folderIdMap.has(move.fromParentId)
+      ? { ...move, fromParentId: folderIdMap.get(move.fromParentId)! }
+      : move,
+  );
+
   // ---- 1. 逐条判定可恢复性 ----
   const decisions: RestoreDecision[] = [];
-  for (const move of snapshot.moves) {
+  for (const move of moves) {
     const current = await bookmarks.get(move.bookmarkId);
     // 原父目录存在性单独确认（书签当前不在目标目录时也检查，便于报告冲突原因）。
     const originalParent = await bookmarks.get(move.fromParentId);
