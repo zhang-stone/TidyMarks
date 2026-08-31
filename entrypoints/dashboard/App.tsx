@@ -438,8 +438,10 @@ function AppHeader(props: {
       <div className="app-header-inner">
       <div className="app-logo">
         <div className="app-logo-icon">
-          <svg viewBox="0 0 24 24">
-            <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z" strokeLinecap="round" strokeLinejoin="round" />
+          <svg viewBox="0 0 200 200">
+            <path d="M58 24H126C134 24 140 30 140 38V168L92 139L44 168V38C44 30 50 24 58 24Z" fill="none" strokeWidth={12} strokeLinejoin="round" />
+            <path d="M64 87L84 108L122 66" fill="none" strokeWidth={14} strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M156 25L160 39L174 43L160 47L156 61L152 47L138 43L152 39Z" fill="#fff" stroke="none" />
           </svg>
         </div>
         <span>TidyMarks</span>
