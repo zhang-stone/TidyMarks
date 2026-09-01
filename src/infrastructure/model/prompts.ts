@@ -20,6 +20,7 @@ function systemPrompt(folderNameStyle: FolderNameStyle): string {
     '目录名使用书签内容的主要语言，简短、具体、可数；不要使用“其他”“杂项”这类兜底目录，除非确实无法归类。',
     namingRule,
     '目录路径最多两级（["一级"] 或 ["一级","二级"]）。',
+    '一级目录总数不超过 12 个；超出时优先合并语义相近的目录。',
   ].join('\n');
 }
 
