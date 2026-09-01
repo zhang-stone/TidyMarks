@@ -65,7 +65,20 @@ export async function undoLastApply(deps: UndoDeps, job: JobState): Promise<Undo
   for (const folder of orderFoldersForRecreation(snapshot.deletedFolders)) {
     const parentId = folderIdMap.get(folder.parentId) ?? folder.parentId;
     try {
-      const created = await bookmarks.createFolder(parentId, folder.title);
+      const original = await bookmarks.get(folder.id);
+      if (original && original.url === undefined) {
+        folderIdMap.set(folder.id, original.id);
+        continue;
+      }
+      const siblings = await bookmarks.getChildren(parentId);
+      const existing = siblings.find(
+        (node) => node.url === undefined && node.title === folder.title,
+      );
+      if (existing) {
+        folderIdMap.set(folder.id, existing.id);
+        continue;
+      }
+      const created = await bookmarks.createFolder(parentId, folder.title, folder.index);
       folderIdMap.set(folder.id, created.id);
     } catch {
       // 原父目录已不存在或创建失败：忽略，交由后续冲突判定处理。
@@ -130,7 +143,7 @@ export async function undoLastApply(deps: UndoDeps, job: JobState): Promise<Undo
     try {
       const children = await bookmarks.getChildren(folderId);
       if (children.length === 0) {
-        await bookmarks.removeTree(folderId);
+        await bookmarks.remove(folderId);
       }
     } catch {
       // 目录已被用户手动删除或移动：忽略，不影响撤销结果。

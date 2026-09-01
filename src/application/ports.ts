@@ -15,8 +15,9 @@ export interface BookmarksPort {
   getTree(): Promise<BookmarkNode[]>;
   get(id: string): Promise<BookmarkNode | undefined>;
   getChildren(parentId: string): Promise<BookmarkNode[]>;
-  createFolder(parentId: string, title: string): Promise<{ id: string }>;
+  createFolder(parentId: string, title: string, index?: number): Promise<{ id: string }>;
   move(id: string, destination: { parentId: string; index?: number }): Promise<void>;
+  /** 删除书签或空文件夹；目录非空时必须失败。 */
   remove(id: string): Promise<void>;
   removeTree(id: string): Promise<void>;
 }

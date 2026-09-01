@@ -193,7 +193,13 @@ describe('applyPlan', () => {
   it('清理被搬空的原文件夹并向上冒泡，非空目录保留', async () => {
     const bm = createMemoryBookmarks(nestedTree);
     const storage = createMemoryStorage();
-    await applyPlan({ bookmarks: bm, storage }, makeJob(), nestedBookmark, nestedAssignment);
+    await applyPlan(
+      { bookmarks: bm, storage },
+      makeJob(),
+      nestedBookmark,
+      nestedAssignment,
+      { cleanupFolderIds: ['20', '21'] },
+    );
 
     // 内层、外层均被搬空 → 都删除；书签移入新建的“开发”。
     expect(bm.nodes().some((n) => n.id === '21')).toBe(false);
@@ -239,6 +245,7 @@ describe('applyPlan', () => {
       makeJob(),
       [{ id: '100', title: 'GitHub', url: 'https://github.com', parentId: '20', rootId: '1', path: [] }],
       nestedAssignment,
+      { cleanupFolderIds: ['20'] },
     );
 
     // “外层”仍含未整理书签 199 → 不删除。
@@ -254,6 +261,7 @@ describe('applyPlan', () => {
       makeJob(),
       nestedBookmark,
       nestedAssignment,
+      { cleanupFolderIds: ['20', '21'] },
     );
     expect(bm.nodes().some((n) => n.id === '20')).toBe(false);
 
@@ -268,5 +276,162 @@ describe('applyPlan', () => {
     expect(inner?.parentId).toBe(outer?.id);
     expect(bm.nodes().find((n) => n.id === '100')?.parentId).toBe(inner?.id);
     expect(bm.nodes().some((n) => n.title === '开发')).toBe(false);
+  });
+
+  it('仅递归清理选中范围内的空目录，未选空目录保持不变', async () => {
+    const scopedTree: BookmarkNode[] = [
+      {
+        id: '0',
+        title: '',
+        children: [
+          {
+            id: '1',
+            parentId: '0',
+            title: '书签栏',
+            children: [
+              {
+                id: '20',
+                parentId: '1',
+                index: 0,
+                title: '选中目录',
+                children: [
+                  { id: '21', parentId: '20', index: 0, title: '空子目录', children: [] },
+                  { id: '100', parentId: '20', index: 1, title: 'GitHub', url: 'https://github.com' },
+                ],
+              },
+              {
+                id: '30',
+                parentId: '1',
+                index: 1,
+                title: '未选空目录',
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const bm = createMemoryBookmarks(scopedTree);
+    const storage = createMemoryStorage();
+
+    await applyPlan(
+      { bookmarks: bm, storage },
+      makeJob(),
+      [{
+        id: '100',
+        title: 'GitHub',
+        url: 'https://github.com',
+        parentId: '20',
+        rootId: '1',
+        path: ['选中目录'],
+      }],
+      [{ bookmarkId: '100', targetPath: ['开发'] }],
+      { cleanupFolderIds: ['20', '21'] },
+    );
+
+    expect(bm.nodes().some((node) => node.id === '20')).toBe(false);
+    expect(bm.nodes().some((node) => node.id === '21')).toBe(false);
+    expect(bm.nodes().some((node) => node.id === '30')).toBe(true);
+  });
+
+  it('明确取消选择的空子目录会阻止父目录被清理', async () => {
+    const bm = createMemoryBookmarks([
+      {
+        id: '0',
+        title: '',
+        children: [
+          {
+            id: '1',
+            parentId: '0',
+            title: '书签栏',
+            children: [
+              {
+                id: '20',
+                parentId: '1',
+                title: '半选目录',
+                children: [
+                  { id: '21', parentId: '20', index: 0, title: '未选空子目录', children: [] },
+                  { id: '100', parentId: '20', index: 1, title: 'GitHub', url: 'https://github.com' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    await applyPlan(
+      { bookmarks: bm, storage: createMemoryStorage() },
+      makeJob(),
+      [{
+        id: '100',
+        title: 'GitHub',
+        url: 'https://github.com',
+        parentId: '20',
+        rootId: '1',
+        path: ['半选目录'],
+      }],
+      [{ bookmarkId: '100', targetPath: ['开发'] }],
+      { cleanupFolderIds: ['20'] },
+    );
+
+    expect(bm.nodes().some((node) => node.id === '20')).toBe(true);
+    expect(bm.nodes().some((node) => node.id === '21')).toBe(true);
+  });
+
+  it('没有持久化文件夹范围的旧方案不会删除原目录', async () => {
+    const bm = createMemoryBookmarks(nestedTree);
+    await applyPlan(
+      { bookmarks: bm, storage: createMemoryStorage() },
+      makeJob(),
+      nestedBookmark,
+      nestedAssignment,
+    );
+
+    expect(bm.nodes().some((node) => node.id === '20')).toBe(true);
+    expect(bm.nodes().some((node) => node.id === '21')).toBe(true);
+  });
+
+  it('删除空目录前并发新增内容时安全保留目录和书签', async () => {
+    const bm = createMemoryBookmarks([
+      {
+        id: '0',
+        title: '',
+        children: [
+          {
+            id: '1',
+            parentId: '0',
+            title: '书签栏',
+            children: [
+              { id: '20', parentId: '1', index: 0, title: '待清理空目录', children: [] },
+              { id: '100', parentId: '1', index: 1, title: 'GitHub', url: 'https://github.com' },
+            ],
+          },
+        ],
+      },
+    ]);
+    const originalRemove = bm.remove.bind(bm);
+    let injected = false;
+    bm.remove = async (id) => {
+      if (id === '20' && !injected) {
+        injected = true;
+        await bm.move('100', { parentId: '20' });
+      }
+      await originalRemove(id);
+    };
+
+    const result = await applyPlan(
+      { bookmarks: bm, storage: createMemoryStorage() },
+      makeJob(),
+      [{ id: '100', title: 'GitHub', url: 'https://github.com', parentId: '1', rootId: '1', path: [] }],
+      [{ bookmarkId: '100', targetPath: ['开发'] }],
+      { cleanupFolderIds: ['20'] },
+    );
+
+    expect(bm.nodes().some((node) => node.id === '20')).toBe(true);
+    expect(bm.nodes().find((node) => node.id === '100')?.parentId).toBe('20');
+    expect(result.failures).toEqual([
+      expect.objectContaining({ folderId: '20', message: expect.stringContaining('清理空文件夹') }),
+    ]);
   });
 });

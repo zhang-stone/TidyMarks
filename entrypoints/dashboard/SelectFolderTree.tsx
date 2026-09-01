@@ -6,7 +6,7 @@ export interface SelectFolderTreeProps {
   tree: FolderTreeNode[];
   folderMap: Map<string, FolderTreeNode>;
   activeFolderId: string | null;
-  selectedIds: Set<string> | null;
+  selectedFolderIds: Set<string> | null;
   onActiveFolderChange: (id: string) => void;
   onToggleFolder: (node: FolderTreeNode) => void;
 }
@@ -17,8 +17,15 @@ const FolderIcon = () => (
   </svg>
 );
 
-function collectBookmarkIds(node: FolderTreeNode): string[] {
-  return [...node.bookmarkIds, ...node.children.flatMap(collectBookmarkIds)];
+function collectFolderIds(node: FolderTreeNode): string[] {
+  return [node.id, ...node.children.flatMap(collectFolderIds)];
+}
+
+function countBookmarks(node: FolderTreeNode): number {
+  return node.bookmarkIds.length + node.children.reduce(
+    (total, child) => total + countBookmarks(child),
+    0,
+  );
 }
 
 export default function SelectFolderTree(props: SelectFolderTreeProps) {
@@ -43,10 +50,9 @@ export default function SelectFolderTree(props: SelectFolderTreeProps) {
   }, [props.tree]);
 
   const checkState = (node: FolderTreeNode): 'all' | 'some' | 'none' => {
-    const ids = collectBookmarkIds(node);
-    if (!ids.length) return 'none';
-    if (!props.selectedIds) return 'all';
-    const selected = ids.filter((id) => props.selectedIds!.has(id)).length;
+    const ids = collectFolderIds(node);
+    if (!props.selectedFolderIds) return 'all';
+    const selected = ids.filter((id) => props.selectedFolderIds!.has(id)).length;
     if (selected === ids.length) return 'all';
     return selected > 0 ? 'some' : 'none';
   };
@@ -59,10 +65,7 @@ export default function SelectFolderTree(props: SelectFolderTreeProps) {
             render={({ node, nodeState }) => {
               const folder = props.folderMap.get(node.id);
               if (!folder) return null;
-              const ids = collectBookmarkIds(folder);
-              const selected = props.selectedIds
-                ? ids.filter((id) => props.selectedIds!.has(id)).length
-                : ids.length;
+              const bookmarkCount = countBookmarks(folder);
               const state = checkState(folder);
               const content = (
                 <>
@@ -75,19 +78,15 @@ export default function SelectFolderTree(props: SelectFolderTreeProps) {
                   ) : (
                     <TreeView.ItemText className="folder-tree-name">{node.name}</TreeView.ItemText>
                   )}
-                  {ids.length > 0 && (
-                    <>
-                      <span className="folder-tree-count">{selected}/{ids.length}</span>
-                      <input
-                        type="checkbox"
-                        className="folder-tree-checkbox"
-                        checked={state !== 'none'}
-                        ref={(element) => { if (element) element.indeterminate = state === 'some'; }}
-                        onChange={(event) => { event.stopPropagation(); props.onToggleFolder(folder); }}
-                        onClick={(event) => event.stopPropagation()}
-                      />
-                    </>
-                  )}
+                  <span className="folder-tree-count">{bookmarkCount}</span>
+                  <input
+                    type="checkbox"
+                    className="folder-tree-checkbox"
+                    checked={state !== 'none'}
+                    ref={(element) => { if (element) element.indeterminate = state === 'some'; }}
+                    onChange={(event) => { event.stopPropagation(); props.onToggleFolder(folder); }}
+                    onClick={(event) => event.stopPropagation()}
+                  />
                 </>
               );
 

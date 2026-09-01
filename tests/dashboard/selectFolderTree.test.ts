@@ -42,9 +42,10 @@ describe('选择范围文件夹树', () => {
     // App 模块在顶层创建 storage adapter，SSR 只需最小 API 占位。
     (globalThis as { chrome?: unknown }).chrome = {
       storage: { local: {} },
+      runtime: { id: 'test-extension' },
     };
 
-    const [{ SelectPage }, { default: SelectFolderTree }] = await Promise.all([
+    const [{ SelectPage, PreviewPage, buildFolderTree, collectAllFolderIds, bookmarksInSelectedFolders, toggleFolderSelection }, { default: SelectFolderTree }] = await Promise.all([
       import('@/entrypoints/dashboard/App'),
       import('@/entrypoints/dashboard/SelectFolderTree'),
     ]);
@@ -54,18 +55,21 @@ describe('选择范围文件夹树', () => {
     const bytedance: FolderTreeNode = {
       id: 'bytedance', name: 'bytedance', children: [shortcuts], bookmarkIds: [],
     };
+    const empty: FolderTreeNode = {
+      id: 'empty', name: '空目录', children: [], bookmarkIds: [],
+    };
     const folderTreeHtml = renderToStaticMarkup(createElement(SelectFolderTree, {
-      tree: [bytedance],
-      folderMap: new Map([['bytedance', bytedance], ['shortcuts', shortcuts]]),
+      tree: [bytedance, empty],
+      folderMap: new Map([['bytedance', bytedance], ['shortcuts', shortcuts], ['empty', empty]]),
       activeFolderId: null,
-      selectedIds: null,
+      selectedFolderIds: null,
       onActiveFolderChange: () => undefined,
       onToggleFolder: () => undefined,
     }));
     const page = createElement(SelectPage, {
       scan,
-      selectedIds: null,
-      onSelect: () => undefined,
+      selectedFolderIds: null,
+      onSelectFolders: () => undefined,
       onBack: () => undefined,
       onGenerate: () => undefined,
     });
@@ -76,6 +80,8 @@ describe('选择范围文件夹树', () => {
     const parentBranchIndex = folderTreeHtml.lastIndexOf('data-part="branch-control"', shortcutIndex);
     expect(shortcutIndex).toBeGreaterThan(-1);
     expect(leafItemIndex).toBeGreaterThan(parentBranchIndex);
+    expect(folderTreeHtml).toContain('空目录');
+    expect(folderTreeHtml).toContain('type="checkbox"');
     expect(html).toContain('保守整理');
     expect(html).toContain('重新规划目录');
     expect(html).toContain('name="organize-mode" checked="" value="conservative"');
@@ -83,5 +89,42 @@ describe('选择范围文件夹树', () => {
     expect(html).toContain('图标 + 文字');
     expect(html).toContain('纯文字');
     expect(html).toContain('name="folder-name-style" checked="" value="emoji"');
+
+    const builtTree = buildFolderTree({
+      ...scan,
+      folders: [
+        ...scan.folders,
+        {
+          id: 'empty',
+          parentId: 'root',
+          rootId: 'root',
+          title: '空目录',
+          path: ['空目录'],
+          depth: 1,
+        },
+      ],
+    });
+    expect(builtTree.flatMap(collectAllFolderIds)).toContain('empty');
+    expect(bookmarksInSelectedFolders(scan, new Set(['shortcuts'])).map((item) => item.id))
+      .toEqual(['bookmark']);
+    expect(bookmarksInSelectedFolders(scan, new Set(['bytedance']))).toEqual([]);
+
+    const allFolderIds = ['bytedance', 'shortcuts', 'empty'];
+    const withoutBytedance = toggleFolderSelection(null, allFolderIds, bytedance);
+    expect([...withoutBytedance]).toEqual(['empty']);
+    const shortcutsOnly = toggleFolderSelection(withoutBytedance, allFolderIds, shortcuts);
+    expect([...shortcutsOnly].sort()).toEqual(['empty', 'shortcuts']);
+
+    const previewHtml = renderToStaticMarkup(createElement(PreviewPage, {
+      assignments: [{ bookmarkId: 'bookmark', targetPath: ['开发'] }],
+      scan,
+      selectedFolderCount: 2,
+      bookmarksById: new Map([['bookmark', scan.bookmarks[0]!]]),
+      onBack: () => undefined,
+      onApply: () => undefined,
+    }));
+    expect(previewHtml).toContain('书签仅供查看');
+    expect(previewHtml).toContain('应用方案并清理空目录');
+    expect(previewHtml).not.toContain('点击书签');
   });
 });

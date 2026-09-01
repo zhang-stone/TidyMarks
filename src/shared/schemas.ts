@@ -97,6 +97,8 @@ export type Assignment = z.infer<typeof AssignmentSchema>;
 export const PlanRecordSchema = z.object({
   jobId: z.string(),
   createdAt: z.number(),
+  /** 用户明确选中的文件夹范围；旧方案默认不清理任何原文件夹。 */
+  selectedFolderIds: z.array(z.string()).default([]),
   /** 旧方案默认按历史行为视为“重新规划目录”。 */
   mode: OrganizeModeSchema.default('reorganize'),
   /** 旧方案的目录名均为纯文字。 */
@@ -134,6 +136,7 @@ export type JobStatus = (typeof JOB_STATUSES)[number];
 
 export const FailureItemSchema = z.object({
   bookmarkId: z.string().optional(),
+  folderId: z.string().optional(),
   kind: z.enum(ERROR_KINDS),
   message: z.string(),
 });

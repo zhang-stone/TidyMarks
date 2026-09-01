@@ -6,6 +6,7 @@ import {
   validateAssignmentBatch,
   bookmarkDomain,
 } from '@/src/domain/organize/plan';
+import { PlanRecordSchema } from '@/src/shared/schemas';
 
 describe('sanitizeFolderName', () => {
   it('清理控制字符并折叠空白', () => {
@@ -68,5 +69,16 @@ describe('bookmarkDomain', () => {
   it('提取 hostname，非法 URL 返回空串', () => {
     expect(bookmarkDomain('https://example.com/path')).toBe('example.com');
     expect(bookmarkDomain('not-a-url')).toBe('');
+  });
+});
+
+describe('PlanRecordSchema', () => {
+  it('旧方案缺少文件夹范围时默认禁止清理原目录', () => {
+    const plan = PlanRecordSchema.parse({
+      jobId: 'legacy',
+      createdAt: 1,
+      phase: 'done',
+    });
+    expect(plan.selectedFolderIds).toEqual([]);
   });
 });

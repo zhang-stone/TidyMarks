@@ -27,8 +27,8 @@ export function createBookmarksRepository(): BookmarksPort {
       }
     },
 
-    async createFolder(parentId, title) {
-      const node = await chrome.bookmarks.create({ parentId, title });
+    async createFolder(parentId, title, index) {
+      const node = await chrome.bookmarks.create({ parentId, title, index });
       return { id: node.id };
     },
 

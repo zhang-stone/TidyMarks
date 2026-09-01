@@ -39,6 +39,8 @@ export interface GeneratePlanDeps {
   folderNameStyle?: FolderNameStyle;
   /** 保守模式可选的现有目录白名单，按 Chrome 系统根目录隔离。 */
   existingFolderPaths?: Array<{ rootId: string; path: string[] }>;
+  /** 本次整理与空目录清理的文件夹范围。 */
+  selectedFolderIds?: string[];
   events?: EventsPort;
   now?: () => number;
   signal?: AbortSignal;
@@ -109,6 +111,7 @@ export async function generatePlan(
   const { model, storage } = deps;
   const mode = deps.mode ?? 'reorganize';
   const folderNameStyle = deps.folderNameStyle ?? 'text';
+  const selectedFolderIds = [...new Set(deps.selectedFolderIds ?? [])].sort();
   const now = deps.now ?? (() => Date.now());
   const total = bookmarks.length;
 
@@ -138,11 +141,13 @@ export async function generatePlan(
     existing &&
     existing.jobId === job.jobId &&
     (existing.mode ?? 'reorganize') === mode &&
-    (existing.folderNameStyle ?? 'text') === folderNameStyle
+    (existing.folderNameStyle ?? 'text') === folderNameStyle &&
+    JSON.stringify([...existing.selectedFolderIds].sort()) === JSON.stringify(selectedFolderIds)
       ? existing
       : {
           jobId: job.jobId,
           createdAt: now(),
+          selectedFolderIds,
           mode,
           folderNameStyle,
           phase: mode === 'conservative' ? 'assign' : 'taxonomy',

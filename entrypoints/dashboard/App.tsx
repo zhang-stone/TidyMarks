@@ -18,17 +18,19 @@ import {
   type ModelSettings,
   type OrganizeMode,
   type PlanRecord,
+  type ScanFolder,
   type ScanResult,
   type ScannedBookmark,
 } from '@/src/shared/schemas';
 import { classifyError } from '@/src/shared/errors';
 import { findDuplicateGroups, type DuplicateGroup, type DuplicateKind } from '@/src/domain/bookmarks/duplicates';
+import { findEmptyFolders } from '@/src/domain/bookmarks/emptyFolders';
 
 const SelectFolderTree = lazy(() => import('./SelectFolderTree'));
 
 // ===== 类型定义 =====
 
-type View = 'settings' | 'scan' | 'duplicates' | 'select' | 'organizing' | 'preview' | 'result';
+type View = 'settings' | 'scan' | 'duplicates' | 'emptyFolders' | 'select' | 'organizing' | 'preview' | 'result';
 
 interface AppState {
   view: View;
@@ -36,7 +38,6 @@ interface AppState {
   job: JobState | null;
   scan: ScanResult | null;
   plan: PlanRecord | null;
-  editedAssignments: Assignment[] | null;
   progress: GeneratePlanProgress | null;
   busy: string | null;
   error: string | null;
@@ -50,7 +51,6 @@ type Action =
   | { type: 'scanRefreshed'; scan: ScanResult }
   | { type: 'planProgress'; progress: GeneratePlanProgress }
   | { type: 'planDone'; plan: PlanRecord }
-  | { type: 'assignments'; assignments: Assignment[] }
   | { type: 'jobUpdate'; job: JobState | null }
   | { type: 'busy'; busy: string | null }
   | { type: 'error'; error: string | null };
@@ -61,7 +61,6 @@ const initialState: AppState = {
   job: null,
   scan: null,
   plan: null,
-  editedAssignments: null,
   progress: null,
   busy: null,
   error: null,
@@ -106,12 +105,9 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         plan: action.plan,
-        editedAssignments: action.plan.assignments,
         view: 'preview',
         progress: null,
       };
-    case 'assignments':
-      return { ...state, editedAssignments: action.assignments };
     case 'jobUpdate':
       return { ...state, job: action.job };
     case 'busy':
@@ -136,6 +132,7 @@ function getActiveStep(view: View, jobStatus?: string): number {
     case 'settings': return 0;
     case 'scan': return 1;
     case 'duplicates': return 1;
+    case 'emptyFolders': return 1;
     case 'select': return 2;
     case 'organizing': return 3;
     case 'preview': return 4;
@@ -153,7 +150,7 @@ const storage = createStorageRepository(chrome.storage.local);
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const [selectedIds, setSelectedIds] = useState<Set<string> | null>(null);
+  const [selectedFolderIds, setSelectedFolderIds] = useState<Set<string> | null>(null);
   const jobIdRef = useRef<string>(crypto.randomUUID());
   const settingsReturnViewRef = useRef<View>('scan');
   // 用户在“AI 分析中”页点击返回时置位，避免异步方案结果强制跳转到预览页
@@ -168,6 +165,9 @@ export default function App() {
           sendRequest({ type: 'GET_STATUS', requestId: crypto.randomUUID() }) as Promise<ResumeView>,
         ]);
         dispatch({ type: 'init', settings, status });
+        if (status.plan) {
+          setSelectedFolderIds(new Set(status.plan.selectedFolderIds));
+        }
         if (status.job.jobId) jobIdRef.current = status.job.jobId;
       } catch (error) {
         dispatch({ type: 'error', error: classifyError(error).message });
@@ -213,14 +213,19 @@ export default function App() {
   }, [state.scan]);
 
   const selectedBookmarks = useMemo(
-    () =>
-      (state.scan?.bookmarks ?? []).filter(
-        (b) => !selectedIds || selectedIds.has(b.id),
-      ),
-    [state.scan, selectedIds],
+    () => state.scan ? bookmarksInSelectedFolders(state.scan, selectedFolderIds) : [],
+    [state.scan, selectedFolderIds],
   );
   const duplicateGroups = useMemo(
     () => findDuplicateGroups(state.scan?.bookmarks ?? []),
+    [state.scan],
+  );
+  const emptyFolders = useMemo(
+    () => (state.scan ? findEmptyFolders(state.scan) : []),
+    [state.scan],
+  );
+  const rootTitleById = useMemo(
+    () => new Map((state.scan?.roots ?? []).map((root) => [root.id, root.title])),
     [state.scan],
   );
 
@@ -235,7 +240,7 @@ export default function App() {
 
   return (
     <>
-      {state.view !== 'duplicates' && (
+      {state.view !== 'duplicates' && state.view !== 'emptyFolders' && (
         <AppHeader
           activeStep={activeStep}
           settingsOpen={state.view === 'settings'}
@@ -267,13 +272,39 @@ export default function App() {
               '正在扫描书签',
             )) as { scan: ScanResult; job: JobState } | null;
             if (payload) {
-              setSelectedIds(null);
+              setSelectedFolderIds(null);
               dispatch({ type: 'scanDone', scan: payload.scan, job: payload.job });
             }
           }}
           onNext={() => dispatch({ type: 'view', view: 'select' })}
           duplicateCount={duplicateGroups.length}
           onDuplicates={() => dispatch({ type: 'view', view: 'duplicates' })}
+          emptyFolderCount={emptyFolders.length}
+          onEmptyFolders={() => dispatch({ type: 'view', view: 'emptyFolders' })}
+        />
+      )}
+
+      {state.view === 'emptyFolders' && state.scan && (
+        <EmptyFoldersPage
+          folders={emptyFolders}
+          rootTitleById={rootTitleById}
+          busy={state.busy}
+          onBack={() => dispatch({ type: 'view', view: 'scan' })}
+          onDelete={async (folderIds) => {
+            const payload = (await runCommand(
+              {
+                type: 'DELETE_EMPTY_FOLDERS',
+                requestId: crypto.randomUUID(),
+                folderIds,
+              },
+              '正在删除空文件夹',
+            )) as { scan: ScanResult; deletedIds: string[]; failures: Array<{ message: string }> } | null;
+            if (!payload) return;
+            dispatch({ type: 'scanRefreshed', scan: payload.scan });
+            if (payload.failures.length) {
+              dispatch({ type: 'error', error: `${payload.deletedIds.length} 个已删除，${payload.failures.length} 个删除失败` });
+            }
+          }}
         />
       )}
 
@@ -303,8 +334,8 @@ export default function App() {
       {state.view === 'select' && state.scan && (
         <SelectPage
           scan={state.scan}
-          selectedIds={selectedIds}
-          onSelect={setSelectedIds}
+          selectedFolderIds={selectedFolderIds}
+          onSelectFolders={setSelectedFolderIds}
           onBack={() => dispatch({ type: 'view', view: 'scan' })}
           onGenerate={async (mode, folderNameStyle) => {
             if (!state.settings) {
@@ -338,6 +369,12 @@ export default function App() {
                   storage,
                   mode,
                   folderNameStyle,
+                  selectedFolderIds: [
+                    ...(selectedFolderIds ?? new Set([
+                      ...(state.scan?.roots ?? []).map((root) => root.id),
+                      ...(state.scan?.folders ?? []).map((folder) => folder.id),
+                    ])),
+                  ],
                   existingFolderPaths: (state.scan?.folders ?? []).map((folder) => ({
                     rootId: folder.rootId,
                     path: folder.path,
@@ -376,13 +413,12 @@ export default function App() {
 
       {state.view === 'preview' && state.plan && (
         <PreviewPage
-          assignments={state.editedAssignments ?? state.plan.assignments}
-          taxonomy={state.plan.taxonomy}
+          assignments={state.plan.assignments}
+          scan={state.scan}
+          selectedFolderCount={state.plan.selectedFolderIds.length}
           bookmarksById={bookmarksById}
-          onChange={(assignments) => dispatch({ type: 'assignments', assignments })}
           onBack={() => dispatch({ type: 'view', view: 'select' })}
           onApply={async () => {
-            await storage.savePlan({ ...state.plan!, assignments: state.editedAssignments ?? [] });
             await runCommand(
               { type: 'APPLY_PLAN', requestId: crypto.randomUUID(), jobId: jobIdRef.current },
               '正在应用整理方案',
@@ -395,7 +431,7 @@ export default function App() {
       {state.view === 'result' && state.job && (
         <ResultPage
           job={state.job}
-          totalAssignments={state.editedAssignments?.length ?? state.plan?.assignments.length ?? 0}
+          totalAssignments={state.plan?.assignments.length ?? 0}
           busy={state.busy}
           onRetry={() =>
             void runCommand(
@@ -417,7 +453,7 @@ export default function App() {
           }
           onNewRound={() => {
             jobIdRef.current = crypto.randomUUID();
-            setSelectedIds(null);
+            setSelectedFolderIds(null);
             // 清除持久化 job 与撤销快照，并重置内存 job，避免旧状态残留顶回结果页
             void storage.clear(['plan', 'scan', 'job', 'undo']);
             dispatch({ type: 'jobUpdate', job: null });
@@ -626,6 +662,8 @@ function ScanPage(props: {
   onNext: () => void;
   duplicateCount: number;
   onDuplicates: () => void;
+  emptyFolderCount: number;
+  onEmptyFolders: () => void;
 }) {
   const { scan } = props;
   const bookmarkCount = scan?.bookmarks.length ?? 0;
@@ -692,6 +730,12 @@ function ScanPage(props: {
               <strong>检查重复书签</strong>
               <span>找出相同或相似的重复项</span>
               <b>{props.duplicateCount ? `查看 ${props.duplicateCount} 组结果 →` : '未发现重复项'}</b>
+            </button>
+            <button className="scan-feature-card" onClick={props.onEmptyFolders} disabled={!props.emptyFolderCount}>
+              <span className="scan-feature-icon">🗑</span>
+              <strong>清理空文件夹</strong>
+              <span>删除不含任何书签的空目录</span>
+              <b>{props.emptyFolderCount ? `发现 ${props.emptyFolderCount} 个空文件夹 →` : '没有空文件夹'}</b>
             </button>
           </div>
         </>
@@ -814,6 +858,91 @@ function DuplicateBookmarksPage(props: {
   );
 }
 
+// ===== 清理空文件夹页 =====
+
+function EmptyFoldersPage(props: {
+  folders: ScanFolder[];
+  rootTitleById: Map<string, string>;
+  busy: string | null;
+  onBack: () => void;
+  onDelete: (folderIds: string[]) => void;
+}) {
+  const [checked, setChecked] = useState<Set<string>>(
+    () => new Set(props.folders.map((folder) => folder.id)),
+  );
+
+  const selectedIds = props.folders
+    .filter((folder) => checked.has(folder.id))
+    .map((folder) => folder.id);
+
+  const toggle = (folderId: string) => {
+    setChecked((current) => {
+      const next = new Set(current);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  };
+
+  // 列表按目录树顺序展示（深层在前删除更快，但阅读时按路径排序更直观）
+  const displayFolders = useMemo(
+    () => [...props.folders].sort((a, b) => {
+      const pathA = [props.rootTitleById.get(a.rootId) ?? '', ...a.path].join(' / ');
+      const pathB = [props.rootTitleById.get(b.rootId) ?? '', ...b.path].join(' / ');
+      return pathA.localeCompare(pathB, 'zh-CN');
+    }),
+    [props.folders, props.rootTitleById],
+  );
+
+  return (
+    <main className="duplicate-page">
+      <div className="duplicate-topbar">
+        <button className="duplicate-back" onClick={props.onBack}>‹&nbsp; 返回</button>
+        <span>共发现 {props.folders.length} 个空文件夹</span>
+      </div>
+      <div className="page-header duplicate-heading">
+        <div className="page-header-left">
+          <h1>清理空文件夹</h1>
+          <p>以下文件夹内没有任何书签，勾选后可一键删除；删除父文件夹会同时移除其中的空子目录。</p>
+        </div>
+      </div>
+
+      {props.folders.length === 0 && <div className="duplicate-empty">没有空文件夹</div>}
+
+      <div className="empty-folder-list">
+        {displayFolders.map((folder) => (
+          <label className="empty-folder-item" key={folder.id}>
+            <span className="empty-folder-icon"><FolderIcon /></span>
+            <span className="empty-folder-copy">
+              <strong>{folder.path[folder.path.length - 1] ?? folder.title}</strong>
+              <small>{[props.rootTitleById.get(folder.rootId) ?? '', ...folder.path].join(' / ')}</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={checked.has(folder.id)}
+              onChange={() => toggle(folder.id)}
+              aria-label={`删除 ${folder.path.join(' / ')}`}
+            />
+          </label>
+        ))}
+      </div>
+
+      {props.folders.length > 0 && (
+        <footer className="duplicate-footer">
+          <span>将删除 <strong>{selectedIds.length}</strong> 个空文件夹</span>
+          <button
+            className="btn duplicate-delete-btn"
+            disabled={!selectedIds.length || props.busy !== null}
+            onClick={() => props.onDelete(selectedIds)}
+          >
+            {props.busy ? '正在删除...' : '删除空文件夹'}
+          </button>
+        </footer>
+      )}
+    </main>
+  );
+}
+
 // ===== 选择范围页 =====
 
 export interface FolderTreeNode {
@@ -829,7 +958,7 @@ const FolderIcon = () => (
   </svg>
 );
 
-function buildFolderTree(scan: ScanResult): FolderTreeNode[] {
+export function buildFolderTree(scan: ScanResult): FolderTreeNode[] {
   const folderMap = new Map<string, FolderTreeNode>();
 
   for (const root of scan.roots) {
@@ -848,21 +977,35 @@ function buildFolderTree(scan: ScanResult): FolderTreeNode[] {
     if (folder) folder.bookmarkIds.push(bm.id);
   }
 
-  // 剪枝：移除没有书签的空文件夹
-  const prune = (nodes: FolderTreeNode[]): FolderTreeNode[] => {
-    return nodes
-      .map(n => ({ ...n, children: prune(n.children) }))
-      .filter(n => n.children.length > 0 || n.bookmarkIds.length > 0);
-  };
-
-  return prune(scan.roots.map(r => folderMap.get(r.id)!));
+  return scan.roots.map(r => folderMap.get(r.id)!);
 }
 
-function collectAllBookmarkIds(node: FolderTreeNode): string[] {
-  return [
-    ...node.bookmarkIds,
-    ...node.children.flatMap(collectAllBookmarkIds),
-  ];
+export function collectAllFolderIds(node: FolderTreeNode): string[] {
+  return [node.id, ...node.children.flatMap(collectAllFolderIds)];
+}
+
+export function bookmarksInSelectedFolders(
+  scan: ScanResult,
+  selectedFolderIds: Set<string> | null,
+): ScannedBookmark[] {
+  return scan.bookmarks.filter(
+    (bookmark) => !selectedFolderIds || selectedFolderIds.has(bookmark.parentId),
+  );
+}
+
+export function toggleFolderSelection(
+  selectedFolderIds: Set<string> | null,
+  allFolderIds: string[],
+  node: FolderTreeNode,
+): Set<string> {
+  const subtreeIds = collectAllFolderIds(node);
+  const next = new Set(selectedFolderIds ?? allFolderIds);
+  const allSelected = subtreeIds.every((id) => next.has(id));
+  for (const id of subtreeIds) {
+    if (allSelected) next.delete(id);
+    else next.add(id);
+  }
+  return next;
 }
 
 function buildFolderMap(nodes: FolderTreeNode[]): Map<string, FolderTreeNode> {
@@ -879,19 +1022,21 @@ function buildFolderMap(nodes: FolderTreeNode[]): Map<string, FolderTreeNode> {
 
 export function SelectPage(props: {
   scan: ScanResult;
-  selectedIds: Set<string> | null;
-  onSelect: (ids: Set<string> | null) => void;
+  selectedFolderIds: Set<string> | null;
+  onSelectFolders: (ids: Set<string> | null) => void;
   onBack: () => void;
   onGenerate: (mode: OrganizeMode, folderNameStyle: FolderNameStyle) => void;
 }) {
-  const { scan, selectedIds } = props;
+  const { scan, selectedFolderIds } = props;
   const bookmarks = scan.bookmarks;
-  const selectedCount = selectedIds
-    ? bookmarks.filter((b) => selectedIds.has(b.id)).length
-    : bookmarks.length;
+  const selectedCount = bookmarksInSelectedFolders(scan, selectedFolderIds).length;
 
   const tree = useMemo(() => buildFolderTree(scan), [scan]);
   const folderMap = useMemo(() => buildFolderMap(tree), [tree]);
+  const allFolderIds = useMemo(
+    () => tree.flatMap(collectAllFolderIds),
+    [tree],
+  );
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
   const [organizeMode, setOrganizeMode] = useState<OrganizeMode>('conservative');
   const [folderNameStyle, setFolderNameStyle] = useState<FolderNameStyle>('emoji');
@@ -911,37 +1056,8 @@ export function SelectPage(props: {
       .filter((b): b is ScannedBookmark => !!b);
   }, [activeFolderNode, bookmarksById]);
 
-  const toggleBookmark = (id: string) => {
-    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
-    if (ids.has(id)) ids.delete(id);
-    else ids.add(id);
-    props.onSelect(ids);
-  };
-
   const toggleFolder = (node: FolderTreeNode) => {
-    const bmIds = collectAllBookmarkIds(node);
-    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
-    const allSelected = bmIds.every(id => ids.has(id));
-    if (allSelected) {
-      for (const id of bmIds) ids.delete(id);
-    } else {
-      for (const id of bmIds) ids.add(id);
-    }
-    props.onSelect(ids);
-  };
-
-  const selectAllInFolder = () => {
-    if (!activeFolderNode) return;
-    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
-    for (const id of activeFolderNode.bookmarkIds) ids.add(id);
-    props.onSelect(ids);
-  };
-
-  const selectNoneInFolder = () => {
-    if (!activeFolderNode) return;
-    const ids = new Set(selectedIds ?? bookmarks.map((b) => b.id));
-    for (const id of activeFolderNode.bookmarkIds) ids.delete(id);
-    props.onSelect(ids);
+    props.onSelectFolders(toggleFolderSelection(selectedFolderIds, allFolderIds, node));
   };
 
   return (
@@ -963,7 +1079,7 @@ export function SelectPage(props: {
                 tree={tree}
                 folderMap={folderMap}
                 activeFolderId={activeFolderId}
-                selectedIds={selectedIds}
+                selectedFolderIds={selectedFolderIds}
                 onActiveFolderChange={setActiveFolderId}
                 onToggleFolder={toggleFolder}
               />
@@ -980,19 +1096,11 @@ export function SelectPage(props: {
                   <FolderIcon />
                   {activeFolderNode.name}
                 </span>
-                <div className="select-actions">
-                  <button onClick={selectAllInFolder}>全选</button>
-                  <button onClick={selectNoneInFolder}>全不选</button>
-                </div>
+                <span className="select-bookmark-readonly">书签仅供查看</span>
               </div>
               <div className="select-bookmark-list">
                 {activeFolderBookmarks.map(b => (
-                  <label key={b.id} className="select-bookmark-item">
-                    <input
-                      type="checkbox"
-                      checked={!selectedIds || selectedIds.has(b.id)}
-                      onChange={() => toggleBookmark(b.id)}
-                    />
+                  <div key={b.id} className="select-bookmark-item">
                     <img
                       className="select-bookmark-favicon"
                       src={`chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(b.url)}&size=32`}
@@ -1003,7 +1111,7 @@ export function SelectPage(props: {
                       <span className="select-bookmark-title">{b.title || b.url}</span>
                       <span className="select-bookmark-url">{b.url}</span>
                     </div>
-                  </label>
+                  </div>
                 ))}
                 {activeFolderBookmarks.length === 0 && (
                   <div className="select-empty">该文件夹下无书签</div>
@@ -1100,7 +1208,8 @@ export function SelectPage(props: {
           ← 返回
         </button>
         <span className="select-footer-count">
-          已选 <strong>{selectedCount}</strong> 条书签
+          已选 <strong>{selectedFolderIds?.size ?? allFolderIds.length}</strong> 个文件夹，
+          共 <strong>{selectedCount}</strong> 条书签
         </span>
         <button
           className="btn btn-primary"
@@ -1207,63 +1316,64 @@ function OrganizingPage(props: {
 
 // ===== 预览页 =====
 
-function PreviewPage(props: {
+export function PreviewPage(props: {
   assignments: Assignment[];
-  taxonomy: string[][];
+  scan: ScanResult | null;
+  selectedFolderCount: number;
   bookmarksById: Map<string, ScannedBookmark>;
-  onChange: (assignments: Assignment[]) => void;
   onBack: () => void;
   onApply: () => void;
 }) {
-  const { assignments, taxonomy, bookmarksById } = props;
-  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+  const { assignments, bookmarksById } = props;
+  type PreviewTreeNode = {
+    name: string;
+    isNew: boolean;
+    children: PreviewTreeNode[];
+    bookmarks: { id: string; title: string; url: string }[];
+  };
+  const pathKey = (rootId: string, path: string[]): string => JSON.stringify([rootId, ...path]);
+  const existingFolderPaths = useMemo(
+    () => new Set((props.scan?.folders ?? []).map((folder) => pathKey(folder.rootId, folder.path))),
+    [props.scan],
+  );
 
   // 构建树结构
   const tree = useMemo(() => {
-    type TreeNode = {
-      name: string;
-      isNew: boolean;
-      children: TreeNode[];
-      bookmarks: { id: string; title: string; url: string; excluded: boolean }[];
-    };
-    const root: TreeNode[] = [];
-
-    // 收集所有目标路径
-    const existingFolders = new Set(taxonomy.flat());
-    const grouped = new Map<string, Assignment[]>();
-    for (const a of assignments) {
-      const key = a.targetPath.join('/');
+    const root: PreviewTreeNode[] = [];
+    const grouped = new Map<string, { path: string[]; items: Assignment[] }>();
+    for (const assignment of assignments) {
+      const key = JSON.stringify(assignment.targetPath);
       const group = grouped.get(key);
-      if (group) group.push(a);
-      else grouped.set(key, [a]);
+      if (group) group.items.push(assignment);
+      else grouped.set(key, { path: assignment.targetPath, items: [assignment] });
     }
 
-    for (const [pathStr, items] of grouped) {
-      const parts = pathStr.split('/');
+    for (const { path, items } of grouped.values()) {
       let nodes = root;
-      let currentPath = '';
-
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i] ?? '';
-        currentPath = currentPath ? `${currentPath}/${part}` : part;
+      for (let i = 0; i < path.length; i++) {
+        const part = path[i] ?? '';
+        const currentPath = path.slice(0, i + 1);
         let node = nodes.find(n => n.name === part);
         if (!node) {
+          const isNew = items.some((assignment) => {
+            const bookmark = bookmarksById.get(assignment.bookmarkId);
+            return !bookmark || !existingFolderPaths.has(pathKey(bookmark.rootId, currentPath));
+          });
           node = {
             name: part,
-            isNew: !existingFolders.has(part),
+            isNew,
             children: [],
             bookmarks: [],
           };
           nodes.push(node);
         }
-        if (i === parts.length - 1) {
-          for (const a of items) {
-            const b = bookmarksById.get(a.bookmarkId);
+        if (i === path.length - 1) {
+          for (const assignment of items) {
+            const b = bookmarksById.get(assignment.bookmarkId);
             node.bookmarks.push({
-              id: a.bookmarkId,
-              title: b?.title || b?.url || a.bookmarkId,
+              id: assignment.bookmarkId,
+              title: b?.title || b?.url || assignment.bookmarkId,
               url: b?.url || '',
-              excluded: excludedIds.has(a.bookmarkId),
             });
           }
         }
@@ -1271,45 +1381,42 @@ function PreviewPage(props: {
       }
     }
     return root;
-  }, [assignments, taxonomy, bookmarksById, excludedIds]);
+  }, [assignments, bookmarksById, existingFolderPaths]);
 
-  const toggleExclude = (bookmarkId: string) => {
-    const next = new Set(excludedIds);
-    if (next.has(bookmarkId)) next.delete(bookmarkId);
-    else next.add(bookmarkId);
-    setExcludedIds(next);
-    // 更新 assignments：排除的书签从列表移除
-    props.onChange(assignments.filter(a => !next.has(a.bookmarkId)));
-  };
-
-  const activeCount = assignments.length - excludedIds.size;
   // 统计新建目录数
   const newFolderCount = useMemo(() => {
-    const existingFolders = new Set(taxonomy.flat());
     const newFolders = new Set<string>();
-    for (const a of assignments) {
-      for (const part of a.targetPath) {
-        if (!existingFolders.has(part)) newFolders.add(part);
+    for (const assignment of assignments) {
+      const bookmark = bookmarksById.get(assignment.bookmarkId);
+      if (!bookmark) continue;
+      for (let index = 0; index < assignment.targetPath.length; index++) {
+        const path = assignment.targetPath.slice(0, index + 1);
+        const key = pathKey(bookmark.rootId, path);
+        if (!existingFolderPaths.has(key)) newFolders.add(key);
       }
     }
     return newFolders.size;
-  }, [assignments, taxonomy]);
+  }, [assignments, bookmarksById, existingFolderPaths]);
 
   return (
     <div className="page-container">
       <div className="page-header">
         <div className="page-header-left">
           <h1>预览整理建议</h1>
-          <p>点击书签可排除或恢复。文件夹标注「新」表示将新建该目录。</p>
+          <p>书签仅供查看。文件夹标注「新」表示将新建该目录。</p>
         </div>
         <div className="page-stats">
           <div>
-            <div className="page-stat-value">{activeCount}</div>
+            <div className="page-stat-value">{assignments.length}</div>
             <div className="page-stat-label">将移动</div>
           </div>
           <div>
             <div className="page-stat-value">{newFolderCount}</div>
             <div className="page-stat-label">新建目录</div>
+          </div>
+          <div>
+            <div className="page-stat-value">{props.selectedFolderCount}</div>
+            <div className="page-stat-label">清理范围</div>
           </div>
         </div>
       </div>
@@ -1317,11 +1424,11 @@ function PreviewPage(props: {
       <div className="card">
         <div className="card-header">
           <span>整理后的书签目录树</span>
-          <span>点击书签行可排除</span>
+          <span>书签仅供查看</span>
         </div>
         <div className="tree-view">
           {tree.map(node => (
-            <TreeFolder key={node.name} node={node} onToggle={toggleExclude} />
+            <TreeFolder key={node.name} node={node} />
           ))}
         </div>
       </div>
@@ -1330,10 +1437,10 @@ function PreviewPage(props: {
         <button className="btn btn-outline" onClick={props.onBack}>返回</button>
         <div className="btn-row">
           <span style={{ fontSize: '13px', color: '#6b7280' }}>
-            应用前将保存本地快照，可一键撤销
+            仅清理所选文件夹范围内的空目录，可一键撤销
           </span>
           <button className="btn btn-primary" onClick={() => void props.onApply()}>
-            一键应用 ({activeCount} 条) →
+            应用方案并清理空目录 ({assignments.length} 条) →
           </button>
         </div>
       </div>
@@ -1342,10 +1449,8 @@ function PreviewPage(props: {
 }
 
 // 树节点组件
-function TreeFolder({ node, onToggle, depth = 0 }: {
+function TreeFolder({ node }: {
   node: { name: string; isNew: boolean; children: any[]; bookmarks: any[] };
-  onToggle: (id: string) => void;
-  depth?: number;
 }) {
   const [expanded, setExpanded] = useState(true);
   const totalBookmarks = countBookmarks(node);
@@ -1362,14 +1467,10 @@ function TreeFolder({ node, onToggle, depth = 0 }: {
       {expanded && (
         <div className="tree-folder-children">
           {node.children.map((child: any) => (
-            <TreeFolder key={child.name} node={child} onToggle={onToggle} depth={depth + 1} />
+            <TreeFolder key={child.name} node={child} />
           ))}
           {node.bookmarks.map((b: any) => (
-            <div
-              key={b.id}
-              className={`tree-bookmark ${b.excluded ? 'excluded' : ''}`}
-              onClick={() => onToggle(b.id)}
-            >
+            <div key={b.id} className="tree-bookmark">
               <img
                 className="tree-bookmark-favicon"
                 src={`chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(b.url)}&size=16`}
@@ -1386,7 +1487,7 @@ function TreeFolder({ node, onToggle, depth = 0 }: {
 }
 
 function countBookmarks(node: any): number {
-  let count = node.bookmarks.filter((b: any) => !b.excluded).length;
+  let count = node.bookmarks.length;
   for (const child of node.children) count += countBookmarks(child);
   return count;
 }
@@ -1405,7 +1506,8 @@ function ResultPage(props: {
   const { job, totalAssignments } = props;
   const applied = job.appliedIds.length;
   const failures: FailureItem[] = job.failures;
-  const pending = totalAssignments - applied - failures.length;
+  const bookmarkFailures = failures.filter((failure) => failure.bookmarkId !== undefined).length;
+  const pending = totalAssignments - applied - bookmarkFailures;
   const percent = totalAssignments > 0 ? Math.round((applied / totalAssignments) * 100) : 0;
 
   const isApplying = job.status === 'applying' || job.status === 'undoing';
@@ -1417,7 +1519,7 @@ function ResultPage(props: {
           {isApplying && (
             <>
               <h1>正在写入书签</h1>
-              <p>逐条移动，不会删除任何现有书签</p>
+              <p>逐条移动书签，并清理所选范围内的空文件夹</p>
             </>
           )}
           {job.status === 'completed' && (
@@ -1497,7 +1599,7 @@ function ResultPage(props: {
           </div>
           {failures.map((f, i) => (
             <div key={f.bookmarkId ?? i} className="banner banner-error" style={{ marginBottom: '8px' }}>
-              {f.bookmarkId ? `${f.bookmarkId}：` : ''}{f.message}
+              {f.bookmarkId ? `${f.bookmarkId}：` : f.folderId ? `${f.folderId}：` : ''}{f.message}
             </div>
           ))}
         </div>

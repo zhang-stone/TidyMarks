@@ -4,6 +4,7 @@ import { applyPlan } from '@/src/application/applyPlan';
 import { undoLastApply } from '@/src/application/undoLastApply';
 import { resumeJob } from '@/src/application/resumeJob';
 import { deleteDuplicateBookmarks } from '@/src/application/deleteDuplicateBookmarks';
+import { deleteEmptyFolders } from '@/src/application/deleteEmptyFolders';
 import type { EventsPort, StoragePort } from '@/src/application/ports';
 import { createBookmarksRepository } from '@/src/infrastructure/chrome/bookmarksRepository';
 import {
@@ -99,7 +100,10 @@ async function handleApply(storage: StoragePort, jobId: string): Promise<unknown
     job,
     scan.bookmarks,
     plan.assignments,
-    { createMissingFolders: plan.mode !== 'conservative' },
+    {
+      createMissingFolders: plan.mode !== 'conservative',
+      cleanupFolderIds: plan.selectedFolderIds,
+    },
   );
   return { job: result.job };
 }
@@ -195,6 +199,12 @@ export default defineBackground(() => {
             payload = await deleteDuplicateBookmarks(
               { bookmarks: createBookmarksRepository(), storage },
               request.bookmarkIds,
+            );
+            break;
+          case 'DELETE_EMPTY_FOLDERS':
+            payload = await deleteEmptyFolders(
+              { bookmarks: createBookmarksRepository(), storage },
+              request.folderIds,
             );
             break;
         }

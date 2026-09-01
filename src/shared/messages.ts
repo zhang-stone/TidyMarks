@@ -54,6 +54,12 @@ export const DeleteDuplicateBookmarksRequestSchema = z.object({
   bookmarkIds: z.array(z.string()).min(1),
 });
 
+export const DeleteEmptyFoldersRequestSchema = z.object({
+  type: z.literal('DELETE_EMPTY_FOLDERS'),
+  requestId: z.string(),
+  folderIds: z.array(z.string()).min(1),
+});
+
 export const RequestSchema = z.discriminatedUnion('type', [
   GetStatusRequestSchema,
   ScanBookmarksRequestSchema,
@@ -62,6 +68,7 @@ export const RequestSchema = z.discriminatedUnion('type', [
   UndoLastApplyRequestSchema,
   CancelJobRequestSchema,
   DeleteDuplicateBookmarksRequestSchema,
+  DeleteEmptyFoldersRequestSchema,
 ]);
 export type RequestMessage = z.infer<typeof RequestSchema>;
 

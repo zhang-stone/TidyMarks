@@ -28,6 +28,8 @@ export interface ApplyResult {
 export interface ApplyPlanOptions {
   /** 保守模式关闭目录创建；目标目录已不存在时只跳过对应书签。 */
   createMissingFolders?: boolean;
+  /** 只有这些原文件夹允许在变空后被清理。 */
+  cleanupFolderIds?: string[];
 }
 
 interface ResolvedTarget {
@@ -44,7 +46,8 @@ interface ResolvedTarget {
  * 2. 基于最新书签状态构建撤销快照（每条待移动书签的 id / parentId / index）；
  * 3. 按路径逐级解析或创建目录（按 parentId + title 查找保证幂等）；
  * 4. 顺序 move，每条成功即更新游标与 appliedIds；单条失败入列继续；
- * 5. 完成置 completed 并展示失败与重试入口。
+ * 5. 从深到浅清理用户选中范围内的空目录；
+ * 6. 完成置 completed 并展示失败与重试入口。
  *
  * 中断恢复：同一 jobId 重复进入时跳过已 applied 的书签，从持久化游标继续。
  */
@@ -58,6 +61,7 @@ export async function applyPlan(
   const { storage, events } = deps;
   const now = deps.now ?? (() => Date.now());
   const createMissingFolders = options.createMissingFolders ?? true;
+  const cleanupFolderIds = new Set(options.cleanupFolderIds ?? []);
 
   if (isWriteLocked(job.status) && job.status !== 'applying') {
     // undoing 期间拒绝新的应用请求。
@@ -198,7 +202,8 @@ export async function applyPlan(
     createdAt: now(),
     moves: moves.filter((m) => m.toFolderId.length > 0),
     createdFolders,
-    deletedFolders: [],
+    deletedFolders:
+      undoExisting && undoExisting.jobId === job.jobId ? [...undoExisting.deletedFolders] : [],
   };
   await storage.saveUndo(snapshot);
 
@@ -267,52 +272,96 @@ export async function applyPlan(
     events?.progress(job.jobId, 'applying', processed, total);
   }
 
-  const completed: JobState = { ...working, failures, status: 'completed', updatedAt: now() };
-  await storage.saveJob(completed);
-
-  // ---- 5. 清理被搬空的原文件夹（仅删空目录，绝不删除任何书签；撤销时会据此重建） ----
-  const deletedFolders = await cleanupEmptySourceFolders(deps.bookmarks, moves, createdIds);
-  if (deletedFolders.length > 0) {
-    await storage.saveUndo({ ...snapshot, deletedFolders });
+  // ---- 5. 仅清理用户选中范围与本轮新建的空文件夹 ----
+  const cleanup = await cleanupSelectedEmptyFolders(
+    deps.bookmarks,
+    storage,
+    snapshot,
+    new Set([...cleanupFolderIds, ...createdIds]),
+    createdIds,
+  );
+  failures.push(...cleanup.failures);
+  working = { ...working, failures, updatedAt: now() };
+  if (cleanup.cancelled) {
+    const interrupted: JobState = {
+      ...working,
+      status: 'interrupted',
+      cancelRequested: true,
+      updatedAt: now(),
+    };
+    await storage.saveJob(interrupted);
+    events?.interrupted(interrupted);
+    return { job: interrupted, appliedIds: interrupted.appliedIds, failures };
   }
 
+  const completed: JobState = { ...working, status: 'completed', updatedAt: now() };
+  await storage.saveJob(completed);
   events?.completed(completed);
   return { job: completed, appliedIds: completed.appliedIds, failures };
 }
 
 /**
- * 逐条移动完成后清理被搬空的原文件夹（架构方案第 8 节的补充）。
- * - 仅删除子节点为空的目录，绝不删除书签；非空目录（含未整理书签或子目录）保留；
- * - 跳过本轮新建目录与系统根目录（parentId 缺失/为 '0'、或不可修改的节点）；
- * - 删空一个目录后其父目录可能随之变空，向上冒泡继续检查；
- * - 返回被删目录清单（含原 parentId/title/index）供撤销时重建。
+ * 按最新树深度从深到浅清理候选目录。
+ * 候选集合由用户明确选中的原文件夹和本轮新建目录组成；未选目录即使为空也不触碰。
+ * 使用 remove 而不是 removeTree，使并发新增内容时由 Chrome 安全拒绝删除。
  */
-async function cleanupEmptySourceFolders(
+async function cleanupSelectedEmptyFolders(
   bookmarks: BookmarksPort,
-  moves: UndoMove[],
+  storage: StoragePort,
+  snapshot: UndoSnapshot,
+  candidateIds: Set<string>,
   createdIds: Set<string>,
-): Promise<DeletedFolder[]> {
-  const deleted: DeletedFolder[] = [];
-  const visited = new Set<string>();
-  const queue: string[] = moves.map((m) => m.fromParentId);
-
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    if (visited.has(id)) continue;
-    visited.add(id);
-    if (createdIds.has(id)) continue; // 本轮新建目录不动
-    const node = await bookmarks.get(id);
-    if (!node || node.url !== undefined) continue; // 已不存在或不是目录
-    if (!node.parentId || node.parentId === '0' || isUnmodifiable(node)) continue; // 系统根目录保护
-    const children = await bookmarks.getChildren(id);
-    if (children.length > 0) continue; // 非空 → 保留，零书签丢失
-    try {
-      await bookmarks.removeTree(id); // 已确认为空目录，removeTree 与 remove 等效且兼容
-    } catch {
-      continue; // 删除失败则不记录，避免撤销误重建
+): Promise<{ deletedFolders: DeletedFolder[]; failures: FailureItem[]; cancelled: boolean }> {
+  const tree = await bookmarks.getTree();
+  const candidates: Array<{ node: BookmarkNode; depth: number }> = [];
+  const visit = (node: BookmarkNode, depth: number): void => {
+    if (candidateIds.has(node.id) && node.url === undefined) {
+      candidates.push({ node, depth });
     }
-    deleted.push({ id, parentId: node.parentId, title: node.title, index: node.index ?? 0 });
-    queue.push(node.parentId); // 父目录可能因此变空
+    for (const child of node.children ?? []) visit(child, depth + 1);
+  };
+  for (const root of tree) visit(root, 0);
+  candidates.sort((a, b) => b.depth - a.depth);
+
+  const deletedFolders = [...snapshot.deletedFolders];
+  const recordedIds = new Set(deletedFolders.map((folder) => folder.id));
+  const failures: FailureItem[] = [];
+
+  for (const candidate of candidates) {
+    const persisted = await storage.loadJob();
+    if (persisted?.cancelRequested) {
+      return { deletedFolders, failures, cancelled: true };
+    }
+
+    const node = await bookmarks.get(candidate.node.id);
+    if (!node || node.url !== undefined) continue;
+    if (!node.parentId || node.parentId === '0' || isUnmodifiable(node)) continue;
+    const children = await bookmarks.getChildren(node.id);
+    if (children.length > 0) continue;
+
+    // 先记录再删除：即使 Service Worker 在两个操作之间被回收，撤销也能识别仍存在的原目录。
+    if (!createdIds.has(node.id) && !recordedIds.has(node.id)) {
+      recordedIds.add(node.id);
+      deletedFolders.push({
+        id: node.id,
+        parentId: node.parentId,
+        title: node.title,
+        index: node.index ?? 0,
+      });
+      await storage.saveUndo({ ...snapshot, deletedFolders: [...deletedFolders] });
+    }
+
+    try {
+      await bookmarks.remove(node.id);
+    } catch (error) {
+      const classified = classifyError(error);
+      failures.push({
+        folderId: node.id,
+        kind: classified.kind,
+        message: `清理空文件夹“${node.title}”失败：${classified.message}`,
+      });
+    }
   }
-  return deleted;
+
+  return { deletedFolders, failures, cancelled: false };
 }

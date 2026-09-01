@@ -58,13 +58,17 @@ export function createMemoryBookmarks(initial: BookmarkNode[]): BookmarksPort & 
     async getChildren(parentId) {
       return (index.get(parentId) ?? []).map((id) => store.get(id)!);
     },
-    async createFolder(parentId, title) {
+    async createFolder(parentId, title, requestedIndex) {
       const id = `n${nextId++}`;
       const siblings = index.get(parentId) ?? [];
-      const node: BookmarkNode = { id, parentId, title, index: siblings.length };
+      const at = Math.min(requestedIndex ?? siblings.length, siblings.length);
+      const node: BookmarkNode = { id, parentId, title, index: at };
       store.set(id, node);
-      siblings.push(id);
+      siblings.splice(at, 0, id);
       index.set(parentId, siblings);
+      siblings.forEach((siblingId, siblingIndex) => {
+        store.get(siblingId)!.index = siblingIndex;
+      });
       return { id };
     },
     async move(id, destination) {
@@ -88,11 +92,15 @@ export function createMemoryBookmarks(initial: BookmarkNode[]): BookmarksPort & 
     },
     async remove(id) {
       const node = store.get(id);
-      if (!node || node.url === undefined) throw new Error(`bookmark ${id} not found`);
+      if (!node) throw new Error(`bookmark ${id} not found`);
+      if (node.url === undefined && (index.get(id)?.length ?? 0) > 0) {
+        throw new Error(`folder ${id} is not empty`);
+      }
       const siblings = index.get(node.parentId ?? '') ?? [];
       const position = siblings.indexOf(id);
       if (position >= 0) siblings.splice(position, 1);
       store.delete(id);
+      index.delete(id);
       reindex();
     },
     async removeTree(id) {

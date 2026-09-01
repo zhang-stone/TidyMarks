@@ -43,12 +43,18 @@ describe('generatePlan', () => {
       }),
     ]);
     const storage = createMemoryStorage();
-    const plan = await generatePlan({ model, storage }, makeJob({ status: 'planning' }), bookmarks, []);
+    const plan = await generatePlan(
+      { model, storage, selectedFolderIds: ['folder-b', 'folder-a', 'folder-a'] },
+      makeJob({ status: 'planning' }),
+      bookmarks,
+      [],
+    );
 
     expect(plan.phase).toBe('done');
     expect(plan.taxonomy).toEqual([['开发'], ['购物']]);
     expect(plan.assignments.map((a) => a.bookmarkId)).toEqual(['b0', 'b1']);
     expect(plan.assignments[0]).toMatchObject({ targetPath: ['开发'] });
+    expect(plan.selectedFolderIds).toEqual(['folder-a', 'folder-b']);
     // 方案就绪后任务须迁移到 reviewing，使 applyPlan 能合法进入 applying。
     expect(storage.dump().job?.status).toBe('reviewing');
   });
