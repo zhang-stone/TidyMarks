@@ -52,6 +52,7 @@ type Action =
   | { type: 'planProgress'; progress: GeneratePlanProgress }
   | { type: 'planDone'; plan: PlanRecord }
   | { type: 'jobUpdate'; job: JobState | null }
+  | { type: 'resetForNewRound' }
   | { type: 'busy'; busy: string | null }
   | { type: 'error'; error: string | null };
 
@@ -110,6 +111,17 @@ function reducer(state: AppState, action: Action): AppState {
       };
     case 'jobUpdate':
       return { ...state, job: action.job };
+    case 'resetForNewRound':
+      // 开始新一轮整理：清空上一轮的扫描/方案/任务，回到扫描页并触发重新扫描
+      return {
+        ...state,
+        scan: null,
+        plan: null,
+        job: null,
+        progress: null,
+        error: null,
+        view: 'scan',
+      };
     case 'busy':
       return { ...state, busy: action.busy, error: action.busy ? null : state.error };
     case 'error':
@@ -206,6 +218,19 @@ export default function App() {
     }
   }, []);
 
+  // 执行一次书签扫描，成功后更新界面
+  const runScan = useCallback(async (): Promise<void> => {
+    jobIdRef.current = crypto.randomUUID();
+    const payload = (await runCommand(
+      { type: 'SCAN_BOOKMARKS', requestId: crypto.randomUUID(), jobId: jobIdRef.current },
+      '正在扫描书签',
+    )) as { scan: ScanResult; job: JobState } | null;
+    if (payload) {
+      setSelectedFolderIds(null);
+      dispatch({ type: 'scanDone', scan: payload.scan, job: payload.job });
+    }
+  }, [runCommand]);
+
   const bookmarksById = useMemo(() => {
     const map = new Map<string, ScannedBookmark>();
     for (const b of state.scan?.bookmarks ?? []) map.set(b.id, b);
@@ -265,17 +290,7 @@ export default function App() {
         <ScanPage
           scan={state.scan}
           busy={state.busy}
-          onScan={async () => {
-            jobIdRef.current = crypto.randomUUID();
-            const payload = (await runCommand(
-              { type: 'SCAN_BOOKMARKS', requestId: crypto.randomUUID(), jobId: jobIdRef.current },
-              '正在扫描书签',
-            )) as { scan: ScanResult; job: JobState } | null;
-            if (payload) {
-              setSelectedFolderIds(null);
-              dispatch({ type: 'scanDone', scan: payload.scan, job: payload.job });
-            }
-          }}
+          onScan={() => void runScan()}
           onNext={() => dispatch({ type: 'view', view: 'select' })}
           duplicateCount={duplicateGroups.length}
           onDuplicates={() => dispatch({ type: 'view', view: 'duplicates' })}
@@ -452,12 +467,11 @@ export default function App() {
             )
           }
           onNewRound={() => {
-            jobIdRef.current = crypto.randomUUID();
             setSelectedFolderIds(null);
-            // 清除持久化 job 与撤销快照，并重置内存 job，避免旧状态残留顶回结果页
+            // 清除持久化 job 与撤销快照，重置内存状态后回到扫描页并重新扫描书签
             void storage.clear(['plan', 'scan', 'job', 'undo']);
-            dispatch({ type: 'jobUpdate', job: null });
-            dispatch({ type: 'view', view: 'scan' });
+            dispatch({ type: 'resetForNewRound' });
+            void runScan();
           }}
         />
       )}

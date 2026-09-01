@@ -4,6 +4,8 @@ import type { Assignment, ScannedBookmark } from '../../shared/schemas';
 export const MAX_SEGMENT_LENGTH = 100;
 export const MAX_PATH_DEPTH = 2;
 export const MAX_EXISTING_PATH_DEPTH = 100;
+/** 重新规划模式下一级目录的数量上限。 */
+export const MAX_TOP_LEVEL_FOLDERS = 12;
 
 const CONTROL_CHARS = new RegExp('[\\u0000-\\u001F\\u007F]', 'g');
 
@@ -42,6 +44,21 @@ export function dedupeTaxonomy(paths: string[][]): string[][] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(path);
+  }
+  return out;
+}
+
+/** 统计目录体系中不同的一级目录（按不区分大小写去重，保留首个写法）。 */
+export function topLevelFolders(taxonomy: string[][]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const path of taxonomy) {
+    const top = path[0];
+    if (!top) continue;
+    const key = top.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(top);
   }
   return out;
 }

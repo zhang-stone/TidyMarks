@@ -1,6 +1,6 @@
 import type { ChatMessage } from '../../application/ports';
 import type { FolderNameStyle, ScannedBookmark } from '../../shared/schemas';
-import { bookmarkFeatureLine } from '../../domain/organize/plan';
+import { bookmarkFeatureLine, MAX_TOP_LEVEL_FOLDERS } from '../../domain/organize/plan';
 
 /**
  * 大模型提示词。约束：
@@ -20,7 +20,7 @@ function systemPrompt(folderNameStyle: FolderNameStyle): string {
     '目录名使用书签内容的主要语言，简短、具体、可数；不要使用“其他”“杂项”这类兜底目录，除非确实无法归类。',
     namingRule,
     '目录路径最多两级（["一级"] 或 ["一级","二级"]）。',
-    '一级目录总数不超过 12 个；超出时优先合并语义相近的目录。',
+    `一级目录总数是硬性上限，绝对不能超过 ${MAX_TOP_LEVEL_FOLDERS} 个；超出时优先合并语义相近的一级目录，或把较窄的一级目录降为其他一级目录的二级目录。`,
   ].join('\n');
 }
 
@@ -57,11 +57,47 @@ export function taxonomyMergePrompt(
     {
       role: 'user',
       content: [
-        '下面是从多批书签样本中收集到的候选目录：',
+        '下面是从多批书签样本中收集到的候选目录（可能有大量语义重复）：',
         JSON.stringify(candidates),
         '',
-        '请合并为一套统一、互斥、不冗余的目录体系，路径最多两级。',
-        '语义相近的目录合并为一个；去掉几乎无人会用的目录。',
+        '请合并为一套统一、互斥、不冗余的目录体系，路径最多两级。合并规则：',
+        '1. 语义相近或指向同一主题的目录必须合并为一个，只保留一个最简洁、最通用的名称，其余全部丢弃。',
+        '   例如“开发工具/编程工具/程序员工具”合并为“开发工具”；“AI/人工智能/AIGC”合并为“人工智能”；',
+        '   “学习/教程/教育资源”合并为“学习资源”。同义词、缩写、单复数、中英文表达相同概念的都视为重复。',
+        '2. 合并只针对“同一层级、含义等价”的目录；父目录与其子目录是包含关系，不是重复，禁止把子目录合并进父目录，',
+        '   也禁止把父目录降级成子目录。例如“开发工具”与“开发工具/前端”必须都保留，不能合并；',
+        '   二级目录之间是否重复，要在同一个一级目录下判断。',
+        '3. 命名风格保持一致；不要出现两个名字不同但含义相同的目录。',
+        '4. 去掉几乎无人会用的、过于冷门或过于宽泛的目录。',
+        `5. 一级目录总数绝对不能超过 ${MAX_TOP_LEVEL_FOLDERS} 个；超出时继续合并语义相近的一级目录，或把较窄的一级目录降为其他一级目录的二级目录。`,
+        '输出 JSON：{"categories": [["一级目录"], ["一级目录","二级目录"]]}',
+      ].join('\n'),
+    },
+  ];
+}
+
+/**
+ * 当合并结果的一级目录数量仍超过上限时，让模型进一步收敛。
+ * 只做“减少一级目录数量”的定向压缩，保留原有二级层级关系。
+ */
+export function taxonomyReducePrompt(
+  categories: string[][],
+  topLevelNames: string[],
+  folderNameStyle: FolderNameStyle = 'text',
+): ChatMessage[] {
+  return [
+    { role: 'system', content: systemPrompt(folderNameStyle) },
+    {
+      role: 'user',
+      content: [
+        '下面这套目录体系的一级目录太多了：',
+        JSON.stringify(categories),
+        `当前一级目录共有 ${topLevelNames.length} 个：${JSON.stringify(topLevelNames)}。`,
+        `请把一级目录压缩到不超过 ${MAX_TOP_LEVEL_FOLDERS} 个。压缩方式：`,
+        '1. 合并语义相近的一级目录，只保留一个最通用的名称；',
+        '2. 或把范围较窄的一级目录，降级为某个更通用一级目录下的二级目录；',
+        '3. 不要丢失原有内容覆盖面，尽量让每个原目录都能在新体系里找到归属；',
+        '4. 父子层级是包含关系，不是重复，不要把二级目录并回其父目录。',
         '输出 JSON：{"categories": [["一级目录"], ["一级目录","二级目录"]]}',
       ].join('\n'),
     },

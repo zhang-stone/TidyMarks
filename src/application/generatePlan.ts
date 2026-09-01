@@ -1,8 +1,10 @@
 import type { EventsPort, ModelPort, StoragePort } from './ports';
 import {
   MAX_EXISTING_PATH_DEPTH,
+  MAX_TOP_LEVEL_FOLDERS,
   dedupeTaxonomy,
   normalizeTargetPath,
+  topLevelFolders,
   validateAssignmentBatch,
 } from '../domain/organize/plan';
 import { assertTransition, canTransition } from '../domain/organize/stateMachine';
@@ -12,6 +14,7 @@ import {
   conservativeAssignmentBatchPrompt,
   taxonomyBatchPrompt,
   taxonomyMergePrompt,
+  taxonomyReducePrompt,
 } from '../infrastructure/model/prompts';
 import { AppError } from '../shared/errors';
 import {
@@ -215,6 +218,19 @@ export async function generatePlan(
     plan.taxonomy = dedupeTaxonomy(parsedMerge.categories);
     if (plan.taxonomy.length === 0) {
       throw new AppError('invalid_response', '模型没有产出任何可用目录');
+    }
+    // 硬性收敛一级目录数量：模型偶尔无视上限，超出时定向压缩，最多重试两次。
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const tops = topLevelFolders(plan.taxonomy);
+      if (tops.length <= MAX_TOP_LEVEL_FOLDERS) break;
+      const reduced = await model.chat(
+        taxonomyReducePrompt(plan.taxonomy, tops, folderNameStyle),
+        deps.signal,
+      );
+      const parsedReduce = parseWith(ModelTaxonomySchema, reduced, '目录体系');
+      const next = dedupeTaxonomy(parsedReduce.categories);
+      if (next.length === 0) break;
+      plan.taxonomy = next;
     }
     plan.phase = 'assign';
     await storage.savePlan(plan);
