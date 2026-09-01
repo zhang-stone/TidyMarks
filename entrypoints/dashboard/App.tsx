@@ -495,7 +495,7 @@ function AppHeader(props: {
           <svg viewBox="0 0 200 200">
             <path d="M58 24H126C134 24 140 30 140 38V168L92 139L44 168V38C44 30 50 24 58 24Z" fill="none" strokeWidth={12} strokeLinejoin="round" />
             <path d="M64 87L84 108L122 66" fill="none" strokeWidth={14} strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M156 25L160 39L174 43L160 47L156 61L152 47L138 43L152 39Z" fill="#fff" stroke="none" />
+            <path d="M156 25L160 39L174 43L160 47L156 61L152 47L138 43L152 39Z" fill="var(--color-content-on-brand)" stroke="none" />
           </svg>
         </div>
         <span>TidyMarks</span>
@@ -968,7 +968,7 @@ export interface FolderTreeNode {
 
 const FolderIcon = () => (
   <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-    <path d="M1 4a1 1 0 0 1 1-1h3.586L7 4.414A1 1 0 0 0 7.707 4.7L8 5H14a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z" fill="#a5b4fc" stroke="#6366f1" strokeWidth="0.6" />
+    <path d="M1 4a1 1 0 0 1 1-1h3.586L7 4.414A1 1 0 0 0 7.707 4.7L8 5H14a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z" fill="var(--color-icon-brand-subtle)" stroke="var(--color-icon-brand)" strokeWidth="0.6" />
   </svg>
 );
 
@@ -1450,7 +1450,7 @@ export function PreviewPage(props: {
       <div className="btn-row-spread">
         <button className="btn btn-outline" onClick={props.onBack}>返回</button>
         <div className="btn-row">
-          <span style={{ fontSize: '13px', color: '#6b7280' }}>
+          <span style={{ fontSize: '13px', color: 'var(--color-text-secondary)' }}>
             仅清理所选文件夹范围内的空目录，可一键撤销
           </span>
           <button className="btn btn-primary" onClick={() => void props.onApply()}>

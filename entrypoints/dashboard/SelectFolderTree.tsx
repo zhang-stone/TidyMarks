@@ -13,7 +13,7 @@ export interface SelectFolderTreeProps {
 
 const FolderIcon = () => (
   <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-    <path d="M1 4a1 1 0 0 1 1-1h3.586L7 4.414A1 1 0 0 0 7.707 4.7L8 5H14a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z" fill="#a5b4fc" stroke="#6366f1" strokeWidth="0.6" />
+    <path d="M1 4a1 1 0 0 1 1-1h3.586L7 4.414A1 1 0 0 0 7.707 4.7L8 5H14a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z" fill="var(--color-icon-brand-subtle)" stroke="var(--color-icon-brand)" strokeWidth="0.6" />
   </svg>
 );
 
