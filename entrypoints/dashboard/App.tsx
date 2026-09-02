@@ -132,13 +132,17 @@ function reducer(state: AppState, action: Action): AppState {
 
 // ===== 步骤配置 =====
 
-const STEPS = [
-  { key: 'scan', label: t('app.steps.scan'), num: 1 },
-  { key: 'select', label: t('app.steps.select'), num: 2 },
-  { key: 'organizing', label: t('app.steps.organizing'), num: 3 },
-  { key: 'preview', label: t('app.steps.preview'), num: 4 },
-  { key: 'result', label: t('app.steps.result'), num: 5 },
-] as const;
+// 每次渲染时按当前语言取文案；不能提升为模块常量，
+// 否则语言在模块加载后切换（bootstrap 或手动切换）会导致步骤条停留在旧语言
+function headerSteps() {
+  return [
+    { key: 'scan', label: t('app.steps.scan'), num: 1 },
+    { key: 'select', label: t('app.steps.select'), num: 2 },
+    { key: 'organizing', label: t('app.steps.organizing'), num: 3 },
+    { key: 'preview', label: t('app.steps.preview'), num: 4 },
+    { key: 'result', label: t('app.steps.result'), num: 5 },
+  ] as const;
+}
 
 function getActiveStep(view: View, jobStatus?: string): number {
   switch (view) {
@@ -489,7 +493,7 @@ function LanguageSwitcher() {
   const rootRef = useRef<HTMLDivElement>(null);
   const currentLocale: Locale = getLocale();
   const currentOption =
-    SUPPORTED_LOCALES.find((o) => o.value === currentLocale) ?? SUPPORTED_LOCALES[0];
+    SUPPORTED_LOCALES.find((o) => o.value === currentLocale) ?? SUPPORTED_LOCALES[0]!;
 
   // 点击组件外部时收起下拉
   useEffect(() => {
@@ -536,7 +540,25 @@ function LanguageSwitcher() {
                 setOpen(false);
               }}
             >
+              <span className="lang-flag">{option.flag}</span>
               {option.optionLabel}
+              {option.value === currentLocale && (
+                <svg
+                  className="lang-check"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                >
+                  <path
+                    d="M3 7.5L6 10.5L11 3.5"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
             </button>
           ))}
         </div>
@@ -553,6 +575,7 @@ function AppHeader(props: {
   onOpenSettings: () => void;
   onCloseSettings: () => void;
 }) {
+  const steps = headerSteps();
   return (
     <header className={`app-header ${props.settingsOpen ? 'settings-open' : ''}`}>
       <div className="app-header-inner">
@@ -571,7 +594,7 @@ function AppHeader(props: {
         <div className="settings-header-title">{t('settings.title')}</div>
       ) : (
         <div className="step-indicator">
-          {STEPS.map((step, i) => (
+          {steps.map((step, i) => (
             <span key={step.key} style={{ display: 'flex', alignItems: 'center' }}>
               <div className="step-item">
                 <div
@@ -586,7 +609,7 @@ function AppHeader(props: {
                   {step.label}
                 </span>
               </div>
-              {i < STEPS.length - 1 && (
+              {i < steps.length - 1 && (
                 <div className={`step-connector ${step.num < props.activeStep ? 'completed' : ''}`} />
               )}
             </span>
@@ -1313,13 +1336,14 @@ interface AnalysisStep {
   description: string;
 }
 
-const ANALYSIS_STEPS: AnalysisStep[] = [
-  { title: t('organizing.stepRead'), description: t('organizing.stepReadDesc') },
-  { title: t('organizing.stepDesign'), description: t('organizing.stepDesignDesc') },
-  { title: t('organizing.stepAssign'), description: t('organizing.stepAssignDesc') },
-  { title: t('organizing.stepValidate'), description: t('organizing.stepValidateDesc') },
-  { title: t('organizing.stepDone'), description: t('organizing.stepDoneDesc') },
-];
+// 语言在模块加载后可能切换（bootstrap 或手动切换），步骤卡片必须在渲染时取文案
+const ANALYSIS_STEP_KEYS = [
+  ['organizing.stepRead', 'organizing.stepReadDesc'],
+  ['organizing.stepDesign', 'organizing.stepDesignDesc'],
+  ['organizing.stepAssign', 'organizing.stepAssignDesc'],
+  ['organizing.stepValidate', 'organizing.stepValidateDesc'],
+  ['organizing.stepDone', 'organizing.stepDoneDesc'],
+] as const;
 
 function OrganizingPage(props: {
   progress: GeneratePlanProgress | null;
@@ -1349,7 +1373,8 @@ function OrganizingPage(props: {
       </div>
 
       <div className="step-list">
-        {ANALYSIS_STEPS.map((step, i) => {
+        {ANALYSIS_STEP_KEYS.map(([titleKey, descKey], i) => {
+          const step: AnalysisStep = { title: t(titleKey), description: t(descKey) };
           let status: 'done' | 'active' | 'pending' = 'pending';
           if (i < currentStep) status = 'done';
           else if (i === currentStep) status = 'active';

@@ -2,6 +2,8 @@ export type Locale = 'zh-CN' | 'en';
 
 export type LanguageOption = {
   value: Locale;
+  /** 选项前的旗帜表情 */
+  flag: string;
   /** 收起态展示的名称 */
   shortLabel: string;
   /** 下拉态展示的名称 */

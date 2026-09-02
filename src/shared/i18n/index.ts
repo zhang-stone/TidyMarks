@@ -1,13 +1,13 @@
 import zhCN from './zh-CN';
 import en from './en';
-import type { Locale, Messages } from './types';
+import type { LanguageOption, Locale, Messages } from './types';
 
 export type { Locale, Messages, LanguageOption } from './types';
 
 /** 语言下拉项；与业务逻辑解耦，描述文案所在文件单一来源。 */
 export const SUPPORTED_LOCALES: LanguageOption[] = [
-  { value: 'zh-CN', shortLabel: '中文', optionLabel: '中文' },
-  { value: 'en', shortLabel: 'EN', optionLabel: 'English' },
+  { value: 'zh-CN', flag: '🇨🇳', shortLabel: '中文', optionLabel: '中文' },
+  { value: 'en', flag: '🇺🇸', shortLabel: 'EN', optionLabel: 'English' },
 ];
 
 const DICTS: Record<Locale, Messages> = {

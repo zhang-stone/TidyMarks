@@ -109,6 +109,110 @@ body {
   color: var(--color-content-on-brand);
 }
 
+/* ===== 头部操作区与语言切换 ===== */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: end;
+}
+
+.header-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--color-border-default);
+}
+
+.lang-switcher {
+  position: relative;
+}
+
+.header-lang-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 9px;
+  background: var(--color-surface-card);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition:
+    background 0.2s,
+    color 0.2s,
+    border-color 0.2s;
+}
+
+.header-lang-btn:hover,
+.header-lang-btn.active {
+  border-color: var(--color-action-primary);
+  background: var(--color-action-primary);
+  color: var(--color-content-on-brand);
+}
+
+.lang-caret {
+  transition: transform 0.2s;
+}
+
+.header-lang-btn.active .lang-caret {
+  transform: rotate(180deg);
+}
+
+.lang-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 190px;
+  padding: 6px;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-default);
+  border-radius: 16px;
+  box-shadow:
+    0 12px 32px rgba(15, 23, 42, 0.12),
+    0 2px 8px rgba(15, 23, 42, 0.08);
+  z-index: 50;
+}
+
+.lang-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+
+.lang-option:hover {
+  background: var(--color-surface-hover);
+}
+
+.lang-option.selected,
+.lang-option.selected:hover {
+  background: var(--color-action-primary);
+  color: var(--color-content-on-brand);
+}
+
+.lang-flag {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.lang-check {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 /* ===== 步骤指示器 ===== */
 .step-indicator {
   display: flex;
