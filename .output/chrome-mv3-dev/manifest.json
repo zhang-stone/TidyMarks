@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "TidyMarks",
-  "description": "Analyze, organize and safely write back Chrome native bookmarks with an AI model you configure.",
+  "name": "__MSG_appName__",
+  "description": "__MSG_appDesc__",
   "version": "0.1.0",
   "icons": {
     "16": "icon/16.png",
@@ -10,6 +10,7 @@
     "96": "icon/96.png",
     "128": "icon/128.png"
   },
+  "default_locale": "zh_CN",
   "minimum_chrome_version": "134",
   "permissions": [
     "bookmarks",

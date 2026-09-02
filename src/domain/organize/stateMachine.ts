@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n';
 import type { JobStatus } from '../../shared/schemas';
 
 /**
@@ -29,7 +30,7 @@ export class IllegalTransitionError extends Error {
     readonly from: JobStatus,
     readonly to: JobStatus,
   ) {
-    super(`非法任务状态迁移: ${from} -> ${to}`);
+    super(t('errors.illegalTransition', { from, to }));
     this.name = 'IllegalTransitionError';
   }
 }

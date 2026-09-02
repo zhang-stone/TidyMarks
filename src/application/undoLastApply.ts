@@ -7,7 +7,8 @@ import {
   orderRestores,
   type RestoreDecision,
 } from '../domain/undo/snapshot';
-import { classifyError } from '../shared/errors';
+import { AppError, classifyError } from '../shared/errors';
+import { t, type MessageKey } from '../shared/i18n';
 import type { FailureItem, JobState, UndoMove, UndoSnapshot } from '../shared/schemas';
 
 export interface UndoDeps {
@@ -23,11 +24,11 @@ export interface UndoResult {
   conflicts: FailureItem[];
 }
 
-const CONFLICT_REASONS = {
-  moved_by_user: '书签已被再次移动，跳过以不覆盖用户的新操作',
-  bookmark_missing: '书签已删除，无法恢复',
-  parent_missing: '原父目录已不存在，无法恢复',
-} as const;
+const CONFLICT_REASON_KEYS = {
+  moved_by_user: 'errors.undoMovedByUser',
+  bookmark_missing: 'errors.undoBookmarkMissing',
+  parent_missing: 'errors.undoParentMissing',
+} satisfies Record<string, MessageKey>;
 
 /**
  * 一键撤销最近一次整理（架构方案第 9 节）。Service Worker 是唯一调用入口。
@@ -44,13 +45,13 @@ export async function undoLastApply(deps: UndoDeps, job: JobState): Promise<Undo
   const now = deps.now ?? (() => Date.now());
 
   if (isWriteLocked(job.status)) {
-    throw new Error(`当前任务状态为 ${job.status}，无法开始撤销`);
+    throw new AppError('user_conflict', 'errors.cannotUndoInState', { status: job.status });
   }
   assertTransition(job.status, 'undoing');
 
   const snapshot: UndoSnapshot | null = await storage.loadUndo();
   if (!snapshot || snapshot.jobId !== job.jobId) {
-    throw new Error('没有可用于撤销的最近一次整理快照');
+    throw new AppError('validation', 'errors.noUndoSnapshot');
   }
 
   let working: JobState = { ...job, status: 'undoing', updatedAt: now(), cancelRequested: false };
@@ -122,7 +123,7 @@ export async function undoLastApply(deps: UndoDeps, job: JobState): Promise<Undo
       conflicts.push({
         bookmarkId: decision.bookmarkId,
         kind: classified.kind,
-        message: `恢复失败：${classified.message}`,
+        message: t('errors.restoreFailed', { message: classified.message }),
       });
     }
   }
@@ -133,7 +134,7 @@ export async function undoLastApply(deps: UndoDeps, job: JobState): Promise<Undo
     conflicts.push({
       bookmarkId: decision.move.bookmarkId,
       kind: 'user_conflict',
-      message: CONFLICT_REASONS[decision.reason],
+      message: t(CONFLICT_REASON_KEYS[decision.reason]),
     });
   }
 
@@ -152,7 +153,7 @@ export async function undoLastApply(deps: UndoDeps, job: JobState): Promise<Undo
 
   // 用户取消时保留快照与报告，状态为 partially_undone 以便重试撤销。
   if (cancelled) {
-    conflicts.push({ kind: 'user_conflict', message: '已按用户请求中断撤销，可重新发起撤销' });
+    conflicts.push({ kind: 'user_conflict', message: t('errors.undoInterrupted') });
   }
 
   const final: JobState = {

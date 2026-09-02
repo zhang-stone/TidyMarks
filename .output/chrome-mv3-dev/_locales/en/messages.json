@@ -1,0 +1,10 @@
+{
+  "appName": {
+    "message": "TidyMarks",
+    "description": "Extension name, shown in chrome://extensions and the Chrome Web Store"
+  },
+  "appDesc": {
+    "message": "Analyze, organize and safely write back Chrome native bookmarks with an AI model you configure.",
+    "description": "Extension description, shown in chrome://extensions and the Chrome Web Store"
+  }
+}

@@ -11,17 +11,20 @@ export async function sendRequest(request: RequestMessage): Promise<unknown> {
     response = await chrome.runtime.sendMessage(request);
   } catch (error) {
     if (error instanceof Error && error.message.includes('cancel')) {
-      throw new AppError('aborted', '请求已取消');
+      throw new AppError('aborted', 'errors.aborted');
     }
-    throw new AppError('unknown', '无法联系后台服务，请重新打开扩展页面');
+    throw new AppError('unknown', 'errors.messagingUnreachable');
   }
 
   const parsed = ResponseSchema.safeParse(response);
   if (!parsed.success) {
-    throw new AppError('unknown', '后台服务返回了无法识别的响应');
+    throw new AppError('unknown', 'errors.unknownResponse');
   }
   if (!parsed.data.ok) {
-    throw new AppError(parsed.data.error.kind, parsed.data.error.message);
+    // 后台抛出的 AppError 已在 Service Worker 侧完成本地化，直接透传文案并保留分类。
+    const error = new AppError(parsed.data.error.kind, 'errors.unknownResponse');
+    error.message = parsed.data.error.message;
+    throw error;
   }
   return parsed.data.payload;
 }

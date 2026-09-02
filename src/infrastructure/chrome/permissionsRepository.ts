@@ -7,10 +7,10 @@ export function originPattern(baseUrl: string): string {
   try {
     url = new URL(baseUrl);
   } catch {
-    throw new AppError('validation', 'Base URL 格式不正确');
+    throw new AppError('validation', 'errors.invalidBaseUrl');
   }
   if (url.protocol !== 'https:') {
-    throw new AppError('validation', '仅支持 HTTPS 的 API Base URL');
+    throw new AppError('validation', 'errors.httpsOnly');
   }
   return `${url.origin}/*`;
 }

@@ -17,7 +17,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new AppError('aborted', '请求已取消'));
+      reject(new AppError('aborted', 'errors.aborted'));
     };
     signal?.addEventListener('abort', onAbort, { once: true });
   });
@@ -57,15 +57,15 @@ export function createOpenAICompatibleClient(
       });
     } catch (error) {
       if (error instanceof AppError) throw error;
-      if (signal?.aborted) throw new AppError('aborted', '请求已取消');
-      throw new AppError('network', '网络请求失败，请检查 Base URL 与网络连接');
+      if (signal?.aborted) throw new AppError('aborted', 'errors.aborted');
+      throw new AppError('network', 'errors.networkCheckBaseUrl');
     }
 
     if (response.ok) {
       const data = (await response.json()) as ChatCompletionResponse;
       const content = data.choices?.[0]?.message?.content;
       if (typeof content !== 'string' || content.length === 0) {
-        throw new AppError('invalid_response', '模型响应缺少内容');
+        throw new AppError('invalid_response', 'errors.emptyContent');
       }
       return content;
     }
@@ -80,9 +80,9 @@ export function createOpenAICompatibleClient(
       throw new ServerError(response.status, detail);
     }
     if (response.status === 401 || response.status === 403) {
-      throw new AppError('permission', `API 鉴权失败（HTTP ${response.status}），请检查 API Key`);
+      throw new AppError('permission', 'errors.authFailed', { status: response.status });
     }
-    throw new AppError('invalid_response', `模型接口返回 HTTP ${response.status}：${detail}`);
+    throw new AppError('invalid_response', 'errors.httpError', { status: response.status, detail });
   }
 
   return {
@@ -95,10 +95,10 @@ export function createOpenAICompatibleClient(
           const retryable = error instanceof RateLimitedError || error instanceof ServerError;
           if (!retryable || attempt >= MAX_AUTO_RETRIES) {
             if (error instanceof RateLimitedError) {
-              throw new AppError('rate_limited', '模型限流（HTTP 429），已自动重试仍失败');
+              throw new AppError('rate_limited', 'errors.rateLimited');
             }
             if (error instanceof ServerError) {
-              throw new AppError('network', `模型服务异常（HTTP ${error.status}），已自动重试仍失败`);
+              throw new AppError('network', 'errors.serverError', { status: error.status });
             }
             throw error;
           }
@@ -144,12 +144,12 @@ export function extractJsonObject(content: string): unknown {
     const start = candidate.indexOf('{');
     const end = candidate.lastIndexOf('}');
     if (start === -1 || end === -1 || end <= start) {
-      throw new AppError('invalid_response', '模型响应不是有效的 JSON');
+      throw new AppError('invalid_response', 'errors.invalidJson');
     }
     try {
       return JSON.parse(candidate.slice(start, end + 1));
     } catch {
-      throw new AppError('invalid_response', '模型响应不是有效的 JSON');
+      throw new AppError('invalid_response', 'errors.invalidJson');
     }
   }
 }

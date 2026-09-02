@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scanBookmarks } from '@/src/application/scanBookmarks';
+import { IllegalTransitionError } from '@/src/domain/organize/stateMachine';
 import { fixtureTree } from '../domain/tree.test';
 import {
   createMemoryBookmarks,
@@ -42,6 +43,6 @@ describe('scanBookmarks', () => {
     const storage = createMemoryStorage();
     await expect(
       scanBookmarks({ bookmarks, storage }, makeJob({ status: 'completed' })),
-    ).rejects.toThrow('非法任务状态迁移');
+    ).rejects.toThrow(IllegalTransitionError);
   });
 });

@@ -1,6 +1,8 @@
 import { findEmptyFolders } from '../domain/bookmarks/emptyFolders';
 import { buildScanResult } from '../domain/bookmarks/tree';
 import type { BookmarkNode } from '../domain/bookmarks/types';
+import { AppError } from '../shared/errors';
+import { t } from '../shared/i18n';
 import type { ScanResult } from '../shared/schemas';
 import type { BookmarksPort, StoragePort } from './ports';
 
@@ -28,12 +30,12 @@ export async function deleteEmptyFolders(
   folderIds: string[],
 ): Promise<DeleteEmptyFoldersResult> {
   const previous = await deps.storage.loadScan();
-  if (!previous) throw new Error('没有可用的扫描结果，请先扫描');
+  if (!previous) throw new AppError('validation', 'errors.noScan');
 
   const ids = [...new Set(folderIds)];
   const emptyFolderIds = new Set(findEmptyFolders(previous).map((folder) => folder.id));
   if (ids.some((id) => !emptyFolderIds.has(id))) {
-    throw new Error('待删除项不是当前扫描识别出的空文件夹，请重新检查');
+    throw new AppError('validation', 'errors.notScannedEmptyFolder');
   }
 
   const depthById = new Map(previous.folders.map((folder) => [folder.id, folder.depth]));
@@ -51,13 +53,16 @@ export async function deleteEmptyFolders(
         continue;
       }
       if (await subtreeHasBookmarks(deps.bookmarks, id)) {
-        failures.push({ folderId: id, message: '文件夹内已存在书签，已跳过' });
+        failures.push({ folderId: id, message: t('errors.folderAlreadyHasBookmarks') });
         continue;
       }
       await deps.bookmarks.removeTree(id);
       deletedIds.push(id);
     } catch (error) {
-      failures.push({ folderId: id, message: error instanceof Error ? error.message : '删除失败' });
+      failures.push({
+        folderId: id,
+        message: error instanceof Error ? error.message : t('errors.deleteFailed'),
+      });
     }
   }
 

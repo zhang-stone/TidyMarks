@@ -1,7 +1,8 @@
 import type { BookmarksPort, EventsPort, StoragePort } from './ports';
 import { assertTransition, isWriteLocked } from '../domain/organize/stateMachine';
 import { isUnmodifiable, type BookmarkNode } from '../domain/bookmarks/types';
-import { classifyError } from '../shared/errors';
+import { AppError, classifyError } from '../shared/errors';
+import { t } from '../shared/i18n';
 import type {
   Assignment,
   DeletedFolder,
@@ -65,7 +66,7 @@ export async function applyPlan(
 
   if (isWriteLocked(job.status) && job.status !== 'applying') {
     // undoing 期间拒绝新的应用请求。
-    throw new Error(`当前任务状态为 ${job.status}，无法开始应用`);
+    throw new AppError('user_conflict', 'errors.cannotApplyInState', { status: job.status });
   }
   if (job.status !== 'applying') {
     assertTransition(job.status, 'applying');
@@ -101,7 +102,7 @@ export async function applyPlan(
 
   const existingFailures: FailureItem[] = working.failures.filter((f) => f.bookmarkId === undefined);
   for (const id of missing) {
-    existingFailures.push({ bookmarkId: id, kind: 'validation', message: '书签已不存在，跳过' });
+    existingFailures.push({ bookmarkId: id, kind: 'validation', message: t('errors.bookmarkMissing') });
   }
   working = { ...working, failures: existingFailures };
 
@@ -176,7 +177,7 @@ export async function applyPlan(
       resolutionFailures.push({
         bookmarkId: bookmark.id,
         kind: 'validation',
-        message: '保守模式的目标文件夹已不存在，已跳过',
+        message: t('errors.conservativeFolderGone'),
       });
       continue;
     }
@@ -239,7 +240,7 @@ export async function applyPlan(
     // 幂等：移动前检查当前位置，已在目标目录时直接标记完成。
     const current = await deps.bookmarks.get(bookmark.id);
     if (!current) {
-      failures.push({ bookmarkId: bookmark.id, kind: 'validation', message: '书签在应用过程中被删除' });
+      failures.push({ bookmarkId: bookmark.id, kind: 'validation', message: t('errors.bookmarkGoneDuringApply') });
       continue;
     }
     if (current.parentId === target.folderId) {
@@ -358,7 +359,7 @@ async function cleanupSelectedEmptyFolders(
       failures.push({
         folderId: node.id,
         kind: classified.kind,
-        message: `清理空文件夹“${node.title}”失败：${classified.message}`,
+        message: t('errors.cleanupFolderFailed', { title: node.title, message: classified.message }),
       });
     }
   }

@@ -1,0 +1,10 @@
+{
+  "appName": {
+    "message": "TidyMarks",
+    "description": "Extension name, shown in chrome://extensions and the Chrome Web Store"
+  },
+  "appDesc": {
+    "message": "用你自己配置的大模型分析、整理并安全写回 Chrome 原生书签。",
+    "description": "Extension description, shown in chrome://extensions and the Chrome Web Store"
+  }
+}

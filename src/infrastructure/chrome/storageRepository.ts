@@ -34,10 +34,7 @@ export function createStorageRepository(area: chrome.storage.StorageArea): Stora
   async function write(key: string, value: unknown): Promise<void> {
     const used = await area.getBytesInUse(null);
     if (used >= STORAGE_QUOTA_LIMIT_BYTES) {
-      throw new AppError(
-        'storage_quota',
-        '本地存储空间不足，请缩小整理范围（chrome.storage.local 配额约 10 MB）',
-      );
+      throw new AppError('storage_quota', 'errors.storageQuota');
     }
     await area.set({ [key]: value });
   }

@@ -17,6 +17,7 @@ import {
   taxonomyReducePrompt,
 } from '../infrastructure/model/prompts';
 import { AppError } from '../shared/errors';
+import { t, type MessageKey } from '../shared/i18n';
 import {
   ModelAssignmentBatchSchema,
   ModelCandidateBatchSchema,
@@ -86,13 +87,13 @@ function existingPathsByRoot(
 function parseWith<S extends { parse(value: unknown): unknown }>(
   schema: S,
   content: string,
-  what: string,
+  whatKey: MessageKey,
 ): ReturnType<S['parse']> {
   try {
     return schema.parse(extractJsonObject(content)) as ReturnType<S['parse']>;
   } catch (error) {
     if (error instanceof AppError) throw error;
-    throw new AppError('invalid_response', `模型响应不符合${what}的格式要求`);
+    throw new AppError('invalid_response', 'errors.invalidFormat', { what: t(whatKey) });
   }
 }
 
@@ -135,7 +136,7 @@ export async function generatePlan(
         .map((bookmark) => bookmark.rootId),
     );
     if (rootsWithoutFolders.size > 0) {
-      throw new AppError('validation', '保守模式下，部分所选书签所在区域没有可用的现有文件夹');
+      throw new AppError('validation', 'errors.conservativeNoFolders');
     }
   }
 
@@ -187,7 +188,7 @@ export async function generatePlan(
           taxonomyBatchPrompt(batches[index]!, existingFolderNames, folderNameStyle),
           deps.signal,
         );
-        const parsed = parseWith(ModelCandidateBatchSchema, content, '候选目录');
+        const parsed = parseWith(ModelCandidateBatchSchema, content, 'errors.whatCandidateTaxonomy');
         completedTaxonomyBatches += 1;
         onProgress?.({
           phase: 'taxonomy',
@@ -214,10 +215,10 @@ export async function generatePlan(
       taxonomyMergePrompt(plan.taxonomyCandidates, folderNameStyle),
       deps.signal,
     );
-    const parsedMerge = parseWith(ModelTaxonomySchema, merged, '目录体系');
+    const parsedMerge = parseWith(ModelTaxonomySchema, merged, 'errors.whatTaxonomy');
     plan.taxonomy = dedupeTaxonomy(parsedMerge.categories);
     if (plan.taxonomy.length === 0) {
-      throw new AppError('invalid_response', '模型没有产出任何可用目录');
+      throw new AppError('invalid_response', 'errors.noCategories');
     }
     // 硬性收敛一级目录数量：模型偶尔无视上限，超出时定向压缩，最多重试两次。
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -227,7 +228,7 @@ export async function generatePlan(
         taxonomyReducePrompt(plan.taxonomy, tops, folderNameStyle),
         deps.signal,
       );
-      const parsedReduce = parseWith(ModelTaxonomySchema, reduced, '目录体系');
+      const parsedReduce = parseWith(ModelTaxonomySchema, reduced, 'errors.whatTaxonomy');
       const next = dedupeTaxonomy(parsedReduce.categories);
       if (next.length === 0) break;
       plan.taxonomy = next;
@@ -258,8 +259,8 @@ export async function generatePlan(
         );
         const parsed =
           mode === 'conservative'
-            ? parseWith(ModelConservativeAssignmentBatchSchema, content, '书签分配')
-            : parseWith(ModelAssignmentBatchSchema, content, '书签分配');
+            ? parseWith(ModelConservativeAssignmentBatchSchema, content, 'errors.whatAssignment')
+            : parseWith(ModelAssignmentBatchSchema, content, 'errors.whatAssignment');
         const allowedExistingPaths =
           mode === 'conservative'
             ? new Map(

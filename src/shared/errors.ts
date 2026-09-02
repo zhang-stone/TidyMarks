@@ -1,3 +1,5 @@
+import { t, type MessageKey, type TranslateParams } from './i18n';
+
 /**
  * 可展示的错误分类。
  * 注意：errorKind 枚举必须与 docs/技术架构方案 第 5 节的失败项语义保持一致，
@@ -25,11 +27,15 @@ export interface ClassifiedError {
 
 export class AppError extends Error {
   readonly kind: ErrorKind;
+  readonly i18nKey: MessageKey;
+  readonly params?: TranslateParams;
 
-  constructor(kind: ErrorKind, message: string) {
-    super(message);
+  constructor(kind: ErrorKind, i18nKey: MessageKey, params?: TranslateParams) {
+    super(t(i18nKey, params));
     this.name = 'AppError';
     this.kind = kind;
+    this.i18nKey = i18nKey;
+    this.params = params;
   }
 }
 
